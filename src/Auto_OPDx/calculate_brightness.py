@@ -231,228 +231,38 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50):
 
 def compile_fluorescence_results(template_path, processed_data, output_csv_path, box_size=50):
     """
-    Compiles all processed fluorescence results using October2024Flu.xlsx as a template,
-    replicating the exact sheet structure, normalization formulas, and formatting.
+    Compiles all processed fluorescence results into a clean, simple CSV
+    containing only the raw data (Num, Area, Mean, StdDev, Min, Max) without post-processing.
     """
-    import openpyxl
-    
     try:
-        if not os.path.exists(template_path):
-            # Fallback to simple concatenation if template is missing
-            dfs = []
-            for name, res_df in processed_data.items():
-                df_copy = res_df.copy()
-                df_copy.insert(0, 'image_name', name)
-                dfs.append(df_copy)
-            if dfs:
-                combined = pd.concat(dfs, ignore_index=True)
-                combined.to_csv(output_csv_path, index=False)
-                return False, "Template file not found. Saved simple combined CSV."
-            return False, "No data to compile."
+        area_val = box_size * box_size
+        
+        with open(output_csv_path, 'w', encoding='utf-8', newline='') as f:
+            import csv
+            writer = csv.writer(f)
             
-        wb = openpyxl.load_workbook(template_path, data_only=True)
-        sheet = wb['Sheet1']
-        
-        # 1. Read SNA data from Excel template itself
-        sna_images = [
-            '25 uM SNA 2 mg/ML 13 hours A', '25 uM SNA 2 mg/ML 13 hours B',
-            '25 uM SNA 2 mg/ML 13 hours C', '25 uM SNA 2 mg/ML 13 hours D'
-        ]
-        
-        sna_raw = {}
-        current_sna_img = None
-        for r in range(1, sheet.max_row + 1):
-            val_a = sheet.cell(row=r, column=1).value
-            if val_a in sna_images:
-                current_sna_img = val_a
-                sna_raw[current_sna_img] = []
-            elif current_sna_img is not None and isinstance(val_a, int) and val_a <= 64:
-                row_vals = [sheet.cell(row=r, column=c).value for c in range(1, 7)]
-                sna_raw[current_sna_img].append({
-                    'component_id': row_vals[0],
-                    'mean_brightness': row_vals[2],
-                    'std_deviation': row_vals[3],
-                    'min_value': row_vals[4],
-                    'max_value': row_vals[5]
-                })
+            for file_idx, (img_name, df_flu) in enumerate(processed_data.items()):
+                writer.writerow([img_name])
+                writer.writerow(["Num", "Area", "Mean", "StdDev", "Min", "Max"])
                 
-        # Default NFs from original sheet
-        nfs = {
-            'P2': 6.7207560539245605,
-            'P6': 5.0425318876902265,
-            'P7': 4.211039066314697,
-            'P8': 7.406955401102702,
-            'P5': 1.0
-        }
-        
-        # Dynamic calculation of NFs if images are processed
-        for group, prefix in [('P2', '25 uM SCR073  200uM P2'), 
-                              ('P6', '25 uM SCR074  200uM P6'), 
-                              ('P7', '25 uM SCR079  200uM P7'), 
-                              ('P8', '25 uM SCR080  200uM P8')]:
-            img_a = f"{prefix} A"
-            img_b = f"{prefix} B"
-            if img_a in processed_data and img_b in processed_data:
-                a_means = processed_data[img_a]['mean_brightness'].iloc[:3].tolist()
-                b_means = processed_data[img_b]['mean_brightness'].iloc[:3].tolist()
-                nfs[group] = np.mean(a_means + b_means)
-                
-        p5_a_name = '25 uM FL 200uM P5 A'
-        if p5_a_name in processed_data:
-            nfs['P5'] = processed_data[p5_a_name]['mean_brightness'].iloc[2]
-            
-        csv_rows = []
-        
-        def fmt(val):
-            if val is None or pd.isna(val):
-                return ""
-            if isinstance(val, float):
-                return f"{val:.6f}"
-            return str(val)
-            
-        # Recreate the sheet row-by-row
-        for r in range(1, sheet.max_row + 1):
-            row_data = ["" for _ in range(29)] # 29 columns A to AC
-            
-            # Read original values across all 29 columns in the template
-            for c in range(1, 30):
-                val = sheet.cell(row=r, column=c).value
-                if val is not None:
-                    row_data[c-1] = val
+                for i, row in df_flu.iterrows():
+                    writer.writerow([
+                        int(row['component_id']),
+                        area_val,
+                        f"{row['mean_brightness']:.6f}" if isinstance(row['mean_brightness'], float) else row['mean_brightness'],
+                        f"{row['std_deviation']:.6f}" if isinstance(row['std_deviation'], float) else row['std_deviation'],
+                        f"{row['min_value']:.6f}" if isinstance(row['min_value'], float) else row['min_value'],
+                        f"{row['max_value']:.6f}" if isinstance(row['max_value'], float) else row['max_value']
+                    ])
+                    # Separate every 16 spots with a blank line
+                    if (i + 1) % 16 == 0 and (i + 1) != len(df_flu):
+                        writer.writerow([])
+                        
+                if file_idx < len(processed_data) - 1:
+                    writer.writerow([])
                     
-            orig_a = sheet.cell(row=r, column=1).value
-            orig_i = sheet.cell(row=r, column=9).value
-            
-            # Left table check
-            if isinstance(orig_a, int) and orig_a <= 64:
-                # Walk up to find the active block name
-                block_name = None
-                for walk_r in range(r, 0, -1):
-                    cand = sheet.cell(row=walk_r, column=1).value
-                    if cand in processed_data or cand in sna_images:
-                        block_name = cand
-                        break
-                        
-                if block_name in processed_data:
-                    df_csv = processed_data[block_name]
-                    spot_row = df_csv[df_csv['component_id'] == orig_a].iloc[0]
-                    row_data[0] = orig_a
-                    row_data[1] = box_size * box_size # area of the bounding box
-                    row_data[2] = spot_row['mean_brightness']
-                    row_data[3] = spot_row['std_deviation']
-                    row_data[4] = spot_row['min_value']
-                    row_data[5] = spot_row['max_value']
-                    
-                    if r >= 1415:
-                        group = 'P5' if 'P5' in block_name else ('P2' if 'P2' in block_name else ('P6' if 'P6' in block_name else ('P7' if 'P7' in block_name else 'P8')))
-                        row_data[2] = spot_row['mean_brightness'] / nfs[group]
-                        row_data[4] = spot_row['min_value'] / nfs[group]
-                        row_data[5] = spot_row['max_value'] / nfs[group]
-                        
-                elif block_name in sna_images:
-                    spot_row = [spot for spot in sna_raw[block_name] if spot['component_id'] == orig_a][0]
-                    row_data[0] = orig_a
-                    row_data[1] = box_size * box_size
-                    row_data[2] = spot_row['mean_brightness']
-                    row_data[3] = spot_row['std_deviation']
-                    row_data[4] = spot_row['min_value']
-                    row_data[5] = spot_row['max_value']
-                    
-            # Right table check
-            if isinstance(orig_i, int) and orig_i <= 16:
-                block_name = None
-                for walk_r in range(r, 0, -1):
-                    cand = sheet.cell(row=walk_r, column=9).value
-                    if cand in processed_data or cand in sna_images:
-                        block_name = cand
-                        break
-                        
-                if block_name is not None:
-                    base_img = block_name[:-2]
-                    
-                    spot_means = []
-                    for letter in ['A', 'B', 'C', 'D']:
-                        img_name = f"{base_img} {letter}"
-                        if img_name in processed_data:
-                            df_csv = processed_data[img_name]
-                            q1_mean = df_csv['mean_brightness'].iloc[orig_i - 1]
-                            q2_mean = df_csv['mean_brightness'].iloc[orig_i - 1 + 16]
-                            q3_mean = df_csv['mean_brightness'].iloc[orig_i - 1 + 32]
-                            q4_mean = df_csv['mean_brightness'].iloc[orig_i - 1 + 48]
-                            spot_means.extend([q1_mean, q2_mean, q3_mean, q4_mean])
-                        elif img_name in sna_images:
-                            sna_df = sna_raw[img_name]
-                            q1_mean = sna_df[orig_i - 1]['mean_brightness']
-                            q2_mean = sna_df[orig_i - 1 + 16]['mean_brightness']
-                            q3_mean = sna_df[orig_i - 1 + 32]['mean_brightness']
-                            q4_mean = sna_df[orig_i - 1 + 48]['mean_brightness']
-                            spot_means.extend([q1_mean, q2_mean, q3_mean, q4_mean])
-                            
-                    row_data[8] = orig_i
-                    for c_idx, val in enumerate(spot_means):
-                        row_data[9 + c_idx] = val
-                        
-                    row_data[25] = np.mean(spot_means)
-                    
-                    group = 'P2' if 'P2' in block_name else ('P6' if 'P6' in block_name else ('P7' if 'P7' in block_name else ('P8' if 'P8' in block_name else 'SNA')))
-                    if group == 'SNA':
-                        row_data[26] = np.std(spot_means, ddof=1)
-                    else:
-                        row_data[26] = row_data[25] / nfs[group]
-                        
-            # Bottom helper table right side
-            if r >= 1415 and orig_i is not None:
-                if isinstance(orig_i, (int, float)):
-                    # Map rows to spots 1,2,3 of A and B
-                    spot_map = {
-                        1416: ('25 uM FL 200uM P5 A', 0), 1417: ('25 uM FL 200uM P5 A', 1), 1418: ('25 uM FL 200uM P5 A', 2),
-                        1419: ('25 uM FL 200uM P5 B', 0), 1420: ('25 uM FL 200uM P5 B', 1), 1421: ('25 uM FL 200uM P5 B', 2),
-                        
-                        1425: ('25 uM SCR073  200uM P2 A', 0), 1426: ('25 uM SCR073  200uM P2 A', 1), 1427: ('25 uM SCR073  200uM P2 A', 2),
-                        1428: ('25 uM SCR073  200uM P2 B', 0), 1429: ('25 uM SCR073  200uM P2 B', 1), 1430: ('25 uM SCR073  200uM P2 B', 2),
-                        
-                        1434: ('25 uM SCR074  200uM P6 A', 0), 1435: ('25 uM SCR074  200uM P6 A', 1), 1436: ('25 uM SCR074  200uM P6 A', 2),
-                        1437: ('25 uM SCR074  200uM P6 B', 0), 1438: ('25 uM SCR074  200uM P6 B', 1), 1439: ('25 uM SCR074  200uM P6 B', 2),
-                        
-                        1443: ('25 uM SCR079  200uM P7 A', 0), 1444: ('25 uM SCR079  200uM P7 A', 1), 1445: ('25 uM SCR079  200uM P7 A', 2),
-                        1446: ('25 uM SCR079  200uM P7 B', 0), 1447: ('25 uM SCR079  200uM P7 B', 1), 1448: ('25 uM SCR079  200uM P7 B', 2),
-                        
-                        1452: ('25 uM SCR080  200uM P8 A', 0), 1453: ('25 uM SCR080  200uM P8 A', 1), 1454: ('25 uM SCR080  200uM P8 A', 2),
-                        1455: ('25 uM SCR080  200uM P8 B', 0), 1456: ('25 uM SCR080  200uM P8 B', 1), 1457: ('25 uM SCR080  200uM P8 B', 2),
-                    }
-                    if r in spot_map:
-                        img_name, spot_idx = spot_map[r]
-                        group = 'P5' if 'P5' in img_name else ('P2' if 'P2' in img_name else ('P6' if 'P6' in img_name else ('P7' if 'P7' in img_name else 'P8')))
-                        if img_name in processed_data:
-                            val_raw = processed_data[img_name]['mean_brightness'].iloc[spot_idx]
-                            row_data[8] = val_raw / nfs[group]
-                            
-                    avg_map = {
-                        1416: 'P5', 1426: 'P2', 1434: 'P6', 1444: 'P7', 1452: 'P8'
-                    }
-                    if r in avg_map:
-                        grp = avg_map[r]
-                        row_data[9] = nfs[grp]
-                        
-            # Replicate Col Y/Z Background row for the top blocks
-            bg_rows = {
-                37: 'P2', 58: 'P6', 79: 'P7', 100: 'P8'
-            }
-            if r in bg_rows:
-                grp = bg_rows[r]
-                row_data[24] = "Background"
-                row_data[25] = nfs[grp]
-                
-            csv_rows.append(row_data)
-            
-        # Write out compiled CSV
-        with open(output_csv_path, 'w', encoding='utf-8') as f:
-            for row in csv_rows:
-                f.write(",".join(map(fmt, row)) + "\n")
-                
-        return True, "Successfully compiled results using template sheet."
-        
+        return True, "Successfully compiled results to CSV."
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return False, f"Failed to compile using template: {str(e)}"
+        return False, f"Failed to save results: {str(e)}"

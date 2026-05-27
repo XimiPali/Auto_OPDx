@@ -434,13 +434,23 @@ class ProfilometryApp(QWidget):
                     base_dir = os.path.dirname(filepath)
                     csv_filename = os.path.join(base_dir, f"fluorescence_data_{img_base_name}.csv")
                     
-                    with open(csv_filename, 'w') as f:
-                        f.write(f"{img_base_name}\n")
-                        f.write(",".join(df_flu.columns) + "\n")
+                    area_val = box_size * box_size
+                    with open(csv_filename, 'w', encoding='utf-8', newline='') as f:
+                        import csv
+                        writer = csv.writer(f)
+                        writer.writerow([img_base_name])
+                        writer.writerow(["Num", "Area", "Mean", "StdDev", "Min", "Max"])
                         for i, row in df_flu.iterrows():
-                            f.write(",".join(map(str, row.values)) + "\n")
+                            writer.writerow([
+                                int(row['component_id']),
+                                area_val,
+                                f"{row['mean_brightness']:.6f}" if isinstance(row['mean_brightness'], float) else row['mean_brightness'],
+                                f"{row['std_deviation']:.6f}" if isinstance(row['std_deviation'], float) else row['std_deviation'],
+                                f"{row['min_value']:.6f}" if isinstance(row['min_value'], float) else row['min_value'],
+                                f"{row['max_value']:.6f}" if isinstance(row['max_value'], float) else row['max_value']
+                            ])
                             if (i + 1) % 16 == 0 and (i + 1) != len(df_flu):
-                                f.write("\n")
+                                writer.writerow([])
                     self.log(f"Saved individual results to: {csv_filename}")
                     
                 except Exception as e:
