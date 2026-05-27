@@ -8,18 +8,22 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import matplotlib.patches as patches
+
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QLineEdit, QPushButton, QFileDialog, 
                              QSpinBox, QTextEdit, QMessageBox, QListWidget, QListWidgetItem,
-                             QSizePolicy)
+                             QSizePolicy, QComboBox)
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QImage, QPixmap, QIcon
+
 from OPDx_read.reader import DektakLoad
 from Auto_OPDx.global_plane import generate_global_plane
 from Auto_OPDx.mask import refine_background_mask
 from Auto_OPDx.filter import filter_components
 from Auto_OPDx.reorder import reorder_components
 from Auto_OPDx.calculate_heights import calculate_heights
+from Auto_OPDx.calculate_brightness import process_fluorescence_image, compile_fluorescence_results
 
 class ProfilometryApp(QWidget):
     def __init__(self):
@@ -27,18 +31,29 @@ class ProfilometryApp(QWidget):
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('Profilometry Heights GUI')
-        self.resize(900, 850)
+        self.setWindowTitle('Auto-OPDx & Fluorescence Data Processor')
+        self.resize(1100, 850)
         
         main_layout = QHBoxLayout()
         layout = QVBoxLayout()
         
-        # 1. OPDx File Selection
+        # 0. Mode Selection
+        mode_layout = QHBoxLayout()
+        self.mode_label = QLabel("Operation Mode:")
+        self.mode_label.setStyleSheet("font-weight: bold;")
+        self.mode_dropdown = QComboBox()
+        self.mode_dropdown.addItems(["Profilometry Mode (OPDx)", "Fluorescence Mode (JPG/PNG)"])
+        self.mode_dropdown.currentIndexChanged.connect(self.on_mode_changed)
+        mode_layout.addWidget(self.mode_label)
+        mode_layout.addWidget(self.mode_dropdown)
+        layout.addLayout(mode_layout)
+        
+        # 1. File Selection
         file_layout = QHBoxLayout()
         self.file_label = QLabel("OPDx Files:")
         self.file_input = QLineEdit()
         self.file_btn = QPushButton("Browse")
-        self.file_btn.clicked.connect(self.browse_opdx)
+        self.file_btn.clicked.connect(self.browse_files)
         file_layout.addWidget(self.file_label)
         file_layout.addWidget(self.file_input)
         file_layout.addWidget(self.file_btn)
@@ -62,10 +77,26 @@ class ProfilometryApp(QWidget):
         grid_layout.addWidget(self.cols_input)
         layout.addLayout(grid_layout)
         
+        # Bounding Box Size Control (only visible in Fluorescence Mode)
+        self.box_size_layout = QHBoxLayout()
+        self.box_size_label = QLabel("Bounding Box Size (px):")
+        self.box_size_input = QSpinBox()
+        self.box_size_input.setRange(5, 200)
+        self.box_size_input.setValue(50)
+        self.box_size_input.valueChanged.connect(self.on_box_size_changed)
+        self.box_size_layout.addWidget(self.box_size_label)
+        self.box_size_layout.addWidget(self.box_size_input)
+        layout.addLayout(self.box_size_layout)
+        
+        # Hide box size controls by default (Profilometry Mode)
+        self.box_size_label.hide()
+        self.box_size_input.hide()
+        
         # 3. Output CSV Selection
         csv_layout = QHBoxLayout()
         self.csv_label = QLabel("Output CSV:")
         self.csv_input = QLineEdit()
+        self.csv_input.setText("sample_heights.csv")
         self.csv_btn = QPushButton("Browse")
         self.csv_btn.clicked.connect(self.browse_csv)
         csv_layout.addWidget(self.csv_label)
@@ -75,7 +106,7 @@ class ProfilometryApp(QWidget):
         
         # 4. Run Button
         self.run_btn = QPushButton("Process Data")
-        self.run_btn.setStyleSheet("font-weight: bold; padding: 10px;")
+        self.run_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b78e4; color: white;")
         self.run_btn.clicked.connect(self.process_data)
         layout.addWidget(self.run_btn)
         
@@ -107,50 +138,116 @@ class ProfilometryApp(QWidget):
         main_layout.addLayout(viz_main_layout, stretch=2)
         
         self.setLayout(main_layout)
+        
+        # Cache dictionaries
+        self.cached_scans = {}
+        self.cached_fluorescence = {}
 
     def log(self, message):
         """Helper to print messages to the GUI text box."""
         self.log_output.append(message)
-        # Force the text edit to scroll to the bottom
         self.log_output.verticalScrollBar().setValue(self.log_output.verticalScrollBar().maximum())
         QApplication.processEvents()
         
-    def browse_opdx(self):
-        filenames, _ = QFileDialog.getOpenFileNames(self, "Select OPDx Files", "", "OPDx Files (*.OPDx *.opdx);;All Files (*)")
+    def on_mode_changed(self, index):
+        """Called when operations mode is switched."""
+        self.file_input.clear()
+        self.preview_list.clear()
+        self.figure.clear()
+        self.canvas.draw()
+        self.cached_scans.clear()
+        self.cached_fluorescence.clear()
+        
+        if index == 0:
+            # Profilometry Mode
+            self.file_label.setText("OPDx Files:")
+            self.box_size_label.hide()
+            self.box_size_input.hide()
+            self.csv_label.setText("Output CSV:")
+            self.csv_input.setText("sample_heights.csv")
+            self.log("Switched to Profilometry Mode (OPDx).")
+        else:
+            # Fluorescence Mode
+            self.file_label.setText("Fluorescence Images:")
+            self.box_size_label.show()
+            self.box_size_input.show()
+            self.csv_label.setText("Output CSV:")
+            self.csv_input.setText("compiled_fluorescence_results.csv")
+            self.log("Switched to Fluorescence Mode (JPG/PNG).")
+            
+    def on_box_size_changed(self):
+        """Called when bounding box size is modified."""
+        # Instantly redraw the visualization with the new green bounding boxes
+        self.display_selected_visualization()
+
+    def browse_files(self):
+        is_fluorescence = self.mode_dropdown.currentIndex() == 1
+        if not is_fluorescence:
+            filenames, _ = QFileDialog.getOpenFileNames(self, "Select OPDx Files", "", "OPDx Files (*.OPDx *.opdx);;All Files (*)")
+        else:
+            filenames, _ = QFileDialog.getOpenFileNames(self, "Select Fluorescence Images", "", "Image Files (*.jpg *.jpeg *.png);;All Files (*)")
+            
         if filenames:
             self.file_input.setText(";".join(filenames))
             self.update_visualizations(filenames)
             
+    def browse_csv(self):
+        is_fluorescence = self.mode_dropdown.currentIndex() == 1
+        default_name = "compiled_fluorescence_results.csv" if is_fluorescence else "sample_heights.csv"
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Output CSV", default_name, "CSV Files (*.csv);;All Files (*)")
+        if filename:
+            self.csv_input.setText(filename)
+
     def update_visualizations(self, filenames):
         self.preview_list.clear()
         self.figure.clear()
         self.canvas.draw()
-        self.cached_scans = {}
+        self.cached_scans.clear()
+        self.cached_fluorescence.clear()
         QApplication.processEvents()
         
-        for idx, opdx_file in enumerate(filenames):
+        is_fluorescence = self.mode_dropdown.currentIndex() == 1
+        
+        for idx, filepath in enumerate(filenames):
             try:
-                loader = DektakLoad(opdx_file)
-                x, y, z = loader.get_data_2D()
-                self.cached_scans[opdx_file] = (x, y, z)
-                
-                import matplotlib.cm as cm
-                # Normalize and colorize for thumbnail using matplotlib viridis colormap
-                z_norm_plt = (z - z.min()) / (z.max() - z.min() + 1e-8)
-                z_color_rgba = cm.viridis(z_norm_plt)
-                z_color_rgb = (z_color_rgba[:, :, :3] * 255).astype(np.uint8)
-                z_color_rgb = np.ascontiguousarray(np.flipud(z_color_rgb))
-                
-                h, w, ch = z_color_rgb.shape
-                bytes_per_line = ch * w
-                qimg = QImage(z_color_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                pixmap = QPixmap.fromImage(qimg)
+                if not is_fluorescence:
+                    loader = DektakLoad(filepath)
+                    x, y, z = loader.get_data_2D()
+                    self.cached_scans[filepath] = (x, y, z)
+                    
+                    import matplotlib.cm as cm
+                    # Normalize and colorize for thumbnail using matplotlib viridis colormap
+                    z_norm_plt = (z - z.min()) / (z.max() - z.min() + 1e-8)
+                    z_color_rgba = cm.viridis(z_norm_plt)
+                    z_color_rgb = (z_color_rgba[:, :, :3] * 255).astype(np.uint8)
+                    z_color_rgb = np.ascontiguousarray(np.flipud(z_color_rgb))
+                    
+                    h, w, ch = z_color_rgb.shape
+                    bytes_per_line = ch * w
+                    qimg = QImage(z_color_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                    pixmap = QPixmap.fromImage(qimg)
+                else:
+                    self.log(f"Preprocessing preview for {os.path.basename(filepath)}...")
+                    rows = self.rows_input.value()
+                    cols = self.cols_input.value()
+                    box_size = self.box_size_input.value()
+                    
+                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size)
+                    self.cached_fluorescence[filepath] = res
+                    
+                    # Create thumbnail from the raw color image
+                    img_rgb = res['img_rgb']
+                    img_rgb_contig = np.ascontiguousarray(img_rgb)
+                    h, w, ch = img_rgb_contig.shape
+                    bytes_per_line = ch * w
+                    qimg = QImage(img_rgb_contig.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                    pixmap = QPixmap.fromImage(qimg)
                 
                 icon_pixmap = pixmap.scaled(100, 100, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
                 icon = QIcon(icon_pixmap)
                 
-                item = QListWidgetItem(icon, os.path.basename(opdx_file))
-                item.setData(Qt.UserRole, opdx_file)
+                item = QListWidgetItem(icon, os.path.basename(filepath))
+                item.setData(Qt.UserRole, filepath)
                 self.preview_list.addItem(item)
                 
                 if idx == 0:
@@ -158,119 +255,211 @@ class ProfilometryApp(QWidget):
                     self.display_selected_visualization(item)
                     
             except Exception as e:
-                self.log(f"Error previewing {opdx_file}: {e}")
+                self.log(f"Error previewing {filepath}: {e}")
+                traceback.print_exc()
                 
         if not filenames:
             self.figure.clear()
             self.canvas.draw()
 
-    def display_selected_visualization(self, item):
-        opdx_file = item.data(Qt.UserRole)
-        if opdx_file in getattr(self, 'cached_scans', {}):
-            x, y, z = self.cached_scans[opdx_file]
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            im = ax.imshow(z, cmap='viridis', origin='lower', extent=[x.min(), x.max(), y.min(), y.max()], aspect='equal')
-            self.figure.colorbar(im, ax=ax, label='Height')
-            ax.set_title(os.path.basename(opdx_file))
-            ax.set_xlabel('X (μm)')
-            ax.set_ylabel('Y (μm)')
-            self.canvas.draw()
+    def display_selected_visualization(self, item=None):
+        if item is None or not isinstance(item, QListWidgetItem):
+            item = self.preview_list.currentItem()
+        if not item:
+            return
             
-    def browse_csv(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Output CSV", "sample_heights.csv", "CSV Files (*.csv);;All Files (*)")
-        if filename:
-            self.csv_input.setText(filename)
+        filepath = item.data(Qt.UserRole)
+        is_fluorescence = self.mode_dropdown.currentIndex() == 1
+        
+        self.figure.clear()
+        
+        if not is_fluorescence:
+            if filepath in self.cached_scans:
+                x, y, z = self.cached_scans[filepath]
+                ax = self.figure.add_subplot(111)
+                im = ax.imshow(z, cmap='viridis', origin='lower', extent=[x.min(), x.max(), y.min(), y.max()], aspect='equal')
+                self.figure.colorbar(im, ax=ax, label='Height')
+                ax.set_title(os.path.basename(filepath))
+                ax.set_xlabel('X (μm)')
+                ax.set_ylabel('Y (μm)')
+                self.figure.tight_layout()
+                self.canvas.draw()
+        else:
+            if filepath in self.cached_fluorescence:
+                res = self.cached_fluorescence[filepath]
+                img_rgb = res['img_rgb']
+                global_centers = res['global_centers']
+                refined_centers = res['refined_centers']
+                
+                ax = self.figure.add_subplot(111)
+                ax.imshow(img_rgb)
+                
+                box_size = self.box_size_input.value()
+                hw = box_size / 2
+                hh = box_size / 2
+                
+                first_global = True
+                first_refined = True
+                first_box = True
+                
+                for r in range(len(global_centers)):
+                    for c in range(len(global_centers[r])):
+                        g_cx, g_cy = global_centers[r][c]
+                        r_cx, r_cy = refined_centers[r][c]
+                        
+                        # Plot initial global crosses in cyan
+                        label_g = "Global Grid" if first_global else ""
+                        ax.scatter(g_cx, g_cy, color='cyan', marker='+', s=35, linewidths=1.0, label=label_g)
+                        first_global = False
+                        
+                        # Plot refined centers in red
+                        label_r = "Refined Centroid" if first_refined else ""
+                        ax.scatter(r_cx, r_cy, color='red', marker='o', s=10, label=label_r)
+                        first_refined = False
+                        
+                        # Plot dynamic green bounding boxes
+                        x_min = max(0, r_cx - hw)
+                        y_min = max(0, r_cy - hh)
+                        
+                        label_b = f"Bounding Box ({box_size}x{box_size})" if first_box else ""
+                        rect = patches.Rectangle((x_min, y_min), box_size, box_size, linewidth=1.5, edgecolor='lime', facecolor='none', label=label_b)
+                        ax.add_patch(rect)
+                        first_box = False
+                
+                ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), borderaxespad=0.)
+                ax.set_title(os.path.basename(filepath))
+                ax.axis('on')
+                self.figure.tight_layout()
+                self.canvas.draw()
             
     def process_data(self):
-        opdx_files_text = self.file_input.text()
+        files_text = self.file_input.text()
         csv_file = self.csv_input.text()
         rows = self.rows_input.value()
         cols = self.cols_input.value()
 
-        if not opdx_files_text or not csv_file:
-            QMessageBox.warning(self, "Input Error", "Please specify both the input OPDx files and output CSV file paths.")
+        if not files_text or not csv_file:
+            QMessageBox.warning(self, "Input Error", "Please specify both the input files and output CSV file paths.")
             return
 
-        opdx_files = [f.strip() for f in opdx_files_text.split(";") if f.strip()]
-        all_results = []
+        files = [f.strip() for f in files_text.split(";") if f.strip()]
+        is_fluorescence = self.mode_dropdown.currentIndex() == 1
 
-        for idx, opdx_file in enumerate(opdx_files):
-            self.log(f"Loading data from {opdx_file}...")
+        if not is_fluorescence:
+            all_results = []
+            for idx, opdx_file in enumerate(files):
+                self.log(f"Loading data from {opdx_file}...")
 
-            try:
-                # Load Data
-                loader = DektakLoad(opdx_file)
-                x, y, z = loader.get_data_2D()
+                try:
+                    loader = DektakLoad(opdx_file)
+                    x, y, z = loader.get_data_2D()
 
-                self.log(f"Data loaded successfully. Matrix shape: {z.shape}")
-                self.log(f"Applying Grid Layout: {rows} rows by {cols} cols...")
+                    self.log(f"Data loaded successfully. Matrix shape: {z.shape}")
+                    self.log(f"Applying Grid Layout: {rows} rows by {cols} cols...")
 
-                num_samples = rows * cols
-                x_mesh, y_mesh = np.meshgrid(x, y)
+                    num_samples = rows * cols
+                    x_mesh, y_mesh = np.meshgrid(x, y)
 
-                global_plane, intercept, coeff  = generate_global_plane(z, x_mesh, y_mesh, group_size=10)
-                background_mask = refine_background_mask(z, x_mesh, y_mesh, intercept, coeff)
+                    global_plane, intercept, coeff  = generate_global_plane(z, x_mesh, y_mesh, group_size=10)
+                    background_mask = refine_background_mask(z, x_mesh, y_mesh, intercept, coeff)
 
-                # Prepare mask for OpenCV connectedComponentsWithStats
-                connectivity = 4
-                output_mask_cv = (~background_mask).astype(np.uint8) * 255
+                    connectivity = 4
+                    output_mask_cv = (~background_mask).astype(np.uint8) * 255
 
-                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(output_mask_cv, connectivity, cv2.CV_32S)
+                    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(output_mask_cv, connectivity, cv2.CV_32S)
+                    self.log(f"OpenCV found {num_labels} raw components.")
 
-                self.log(f"OpenCV found {num_labels} raw components.")
+                    new_num_labels, filtered_labels, filtered_stats, filtered_centroids = filter_components(num_labels, labels, stats, centroids)
+                    self.log(f"After filtering, {new_num_labels} components remain.")
 
-                new_num_labels, filtered_labels, filtered_stats, filtered_centroids = filter_components(num_labels, labels, stats, centroids)
+                    final_labels, final_stats, final_centroids = reorder_components(num_labels, stats, centroids, rows, cols)
+                    self.log(f"Final count for height calculation: {len(final_stats)}")
 
-                self.log(f"After filtering, {new_num_labels} components remain.")
+                    height_results = calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples)
 
-                final_labels, final_stats, final_centroids = reorder_components(num_labels, stats, centroids, rows, cols)
+                    filename = os.path.basename(opdx_file)
+                    all_results.append((filename, height_results))
 
-                self.log(f"Final count for height calculation: {len(final_stats)}")
+                except Exception as e:
+                    traceback.print_exc()
+                    self.log(f"Error processing {opdx_file} at: {traceback.format_exc().splitlines()[-2]}")
+                    self.log(f"Message: {str(e)}")
+                    continue
 
-                height_results = calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples)
+            if all_results:
+                import csv
+                with open(csv_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    if all_results and all_results[0][1]:
+                        columns = list(all_results[0][1][0].keys())
+                    else:
+                        columns = ['component_id', 'centroid_x', 'centroid_y', 'top', 'bottom', 'difference']
 
-                # Append file info and results
-                filename = os.path.basename(opdx_file)
-                all_results.append((filename, height_results))
+                    for file_idx, (filename, file_results) in enumerate(all_results):
+                        writer.writerow([f"{filename}"])
+                        writer.writerow(columns)
 
-            except Exception as e:
-                traceback.print_exc()
-                self.log(f"Error processing {opdx_file} at: {traceback.format_exc().splitlines()[-2]}")
-                self.log(f"Message: {str(e)}")
-                continue
-
-        if all_results:
-            import csv
-            with open(csv_file, 'w', newline='') as f:
-                writer = csv.writer(f)
-                
-                if all_results and all_results[0][1]:
-                    columns = list(all_results[0][1][0].keys())
-                else:
-                    columns = ['component_id', 'centroid_x', 'centroid_y', 'top', 'bottom', 'difference']
-
-                for file_idx, (filename, file_results) in enumerate(all_results):
-                    # Write the filename
-                    writer.writerow([f"{filename}"])
-                    # Write the data column headers
-                    writer.writerow(columns)
-
-                    for i, res in enumerate(file_results):
-                        row = [res.get(col, '') for col in columns]
-                        writer.writerow(row)
-                        
-                        # Add a blank line every 16 points
-                        if (i + 1) % 16 == 0 and (i + 1) != len(file_results):
+                        for i, res in enumerate(file_results):
+                            row = [res.get(col, '') for col in columns]
+                            writer.writerow(row)
+                            if (i + 1) % 16 == 0 and (i + 1) != len(file_results):
+                                writer.writerow([])
+                                
+                        if file_idx < len(all_results) - 1:
                             writer.writerow([])
-                            
-                    # Add a blank line before the next file's header
-                    if file_idx < len(all_results) - 1:
-                        writer.writerow([])
 
-            self.log(f"Calculation complete. Results successfully saved to {csv_file}")
+                self.log(f"Calculation complete. Results successfully saved to {csv_file}")
+            else:
+                self.log("No results were generated. Check for errors.")
         else:
-            self.log("No results were generated. Check for errors.")
+            self.log("Starting Fluorescence Brightness Extraction...")
+            box_size = self.box_size_input.value()
+            processed_data = {}
+
+            for filepath in files:
+                self.log(f"Processing image: {filepath}...")
+                try:
+                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size)
+                    df_flu = res['df']
+                    img_base_name = os.path.splitext(os.path.basename(filepath))[0]
+                    processed_data[img_base_name] = df_flu
+                    
+                    # Also save individual CSV in the same directory
+                    base_dir = os.path.dirname(filepath)
+                    csv_filename = os.path.join(base_dir, f"fluorescence_data_{img_base_name}.csv")
+                    
+                    with open(csv_filename, 'w') as f:
+                        f.write(f"{img_base_name}\n")
+                        f.write(",".join(df_flu.columns) + "\n")
+                        for i, row in df_flu.iterrows():
+                            f.write(",".join(map(str, row.values)) + "\n")
+                            if (i + 1) % 16 == 0 and (i + 1) != len(df_flu):
+                                f.write("\n")
+                    self.log(f"Saved individual results to: {csv_filename}")
+                    
+                except Exception as e:
+                    traceback.print_exc()
+                    self.log(f"Error processing image {filepath}: {e}")
+                    continue
+            
+            if processed_data:
+                # Compile into the single Excel-matching CSV
+                first_dir = os.path.dirname(files[0])
+                template_path = os.path.join(first_dir, "October2024Flu.xlsx")
+                if not os.path.exists(template_path):
+                    template_path = "/home/chris/Auto_OPDx_Fl/Fluorescence Data - OCTOBER 2024 SCR-FL/POST WASH - OCTOBER 2024 SCR-FL/October2024Flu.xlsx"
+                
+                self.log(f"Compiling results into {csv_file}...")
+                self.log(f"Using template file: {template_path if os.path.exists(template_path) else '(none - simple CSV fallback)'}")
+                
+                success, msg = compile_fluorescence_results(template_path, processed_data, csv_file, box_size=box_size)
+                self.log(msg)
+                if success:
+                    self.log(f"Fluorescence data processing complete! Saved to {csv_file}")
+                else:
+                    self.log("Fluorescence processing completed with warnings.")
+            else:
+                self.log("No images were successfully processed.")
 
 def main():
     app = QApplication(sys.argv)
