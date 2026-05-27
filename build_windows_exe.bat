@@ -34,10 +34,25 @@ if %errorlevel% neq 0 (
 echo [2/4] Activating virtual environment and installing dependencies...
 call .venv_build\Scripts\activate.bat
 python -m pip install --upgrade pip
-echo Installing PyInstaller...
-python -m pip install pyinstaller
-echo Installing Auto_OPDx and its repository dependencies...
-python -m pip install .
+
+echo Installing pre-compiled binary wheels...
+python -m pip install numpy pandas matplotlib opencv-python scipy openpyxl pyqt5 pyinstaller
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to install pre-compiled binary packages.
+    pause
+    exit /b
+)
+
+echo Installing repository dependencies...
+python -m pip install git+https://github.com/opruvd/OPDx_read.git
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to install git dependency.
+    pause
+    exit /b
+)
+
+echo Installing Auto_OPDx...
+python -m pip install --no-deps .
 if %errorlevel% neq 0 (
     echo [ERROR] Dependency installation failed.
     pause
