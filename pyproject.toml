@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "OPDx_read @ git+https://github.com/opruvd/OPDx_read",
+    "openpyxl",
     "ansicolors==1.1.8",
     "anyio==4.12.1",
     "appnope==0.1.4",
