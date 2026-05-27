@@ -388,27 +388,33 @@ class ProfilometryApp(QWidget):
 
             if all_results:
                 import csv
-                with open(csv_file, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    if all_results and all_results[0][1]:
-                        columns = list(all_results[0][1][0].keys())
-                    else:
-                        columns = ['component_id', 'centroid_x', 'centroid_y', 'top', 'bottom', 'difference']
+                try:
+                    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        if all_results and all_results[0][1]:
+                            columns = list(all_results[0][1][0].keys())
+                        else:
+                            columns = ['component_id', 'centroid_x', 'centroid_y', 'top', 'bottom', 'difference']
 
-                    for file_idx, (filename, file_results) in enumerate(all_results):
-                        writer.writerow([f"{filename}"])
-                        writer.writerow(columns)
+                        for file_idx, (filename, file_results) in enumerate(all_results):
+                            writer.writerow([f"{filename}"])
+                            writer.writerow(columns)
 
-                        for i, res in enumerate(file_results):
-                            row = [res.get(col, '') for col in columns]
-                            writer.writerow(row)
-                            if (i + 1) % 16 == 0 and (i + 1) != len(file_results):
+                            for i, res in enumerate(file_results):
+                                row = [res.get(col, '') for col in columns]
+                                writer.writerow(row)
+                                if (i + 1) % 16 == 0 and (i + 1) != len(file_results):
+                                    writer.writerow([])
+                                    
+                            if file_idx < len(all_results) - 1:
                                 writer.writerow([])
-                                
-                        if file_idx < len(all_results) - 1:
-                            writer.writerow([])
 
-                self.log(f"Calculation complete. Results successfully saved to {csv_file}")
+                    self.log(f"Calculation complete. Results successfully saved to {csv_file}")
+                    QMessageBox.information(self, "Success", f"Results successfully saved to:\n{csv_file}")
+                except Exception as e:
+                    traceback.print_exc()
+                    self.log(f"Error saving CSV to {csv_file}: {e}")
+                    QMessageBox.critical(self, "Save Error", f"Failed to save CSV to:\n{csv_file}\n\nError: {str(e)}")
             else:
                 self.log("No results were generated. Check for errors.")
         else:
@@ -452,12 +458,19 @@ class ProfilometryApp(QWidget):
                 self.log(f"Compiling results into {csv_file}...")
                 self.log(f"Using template file: {template_path if os.path.exists(template_path) else '(none - simple CSV fallback)'}")
                 
-                success, msg = compile_fluorescence_results(template_path, processed_data, csv_file, box_size=box_size)
-                self.log(msg)
-                if success:
-                    self.log(f"Fluorescence data processing complete! Saved to {csv_file}")
-                else:
-                    self.log("Fluorescence processing completed with warnings.")
+                try:
+                    success, msg = compile_fluorescence_results(template_path, processed_data, csv_file, box_size=box_size)
+                    self.log(msg)
+                    if success:
+                        self.log(f"Fluorescence data processing complete! Saved to {csv_file}")
+                        QMessageBox.information(self, "Success", f"Fluorescence data successfully saved to:\n{csv_file}")
+                    else:
+                        self.log(f"Fluorescence processing completed with warnings: {msg}")
+                        QMessageBox.warning(self, "Save Warning", f"Fluorescence processing completed with warning:\n{msg}")
+                except Exception as e:
+                    traceback.print_exc()
+                    self.log(f"Error compiling fluorescence results: {e}")
+                    QMessageBox.critical(self, "Save Error", f"Failed to save fluorescence results to:\n{csv_file}\n\nError: {str(e)}")
             else:
                 self.log("No images were successfully processed.")
 

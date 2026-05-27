@@ -236,20 +236,20 @@ def compile_fluorescence_results(template_path, processed_data, output_csv_path,
     """
     import openpyxl
     
-    if not os.path.exists(template_path):
-        # Fallback to simple concatenation if template is missing
-        dfs = []
-        for name, res_df in processed_data.items():
-            df_copy = res_df.copy()
-            df_copy.insert(0, 'image_name', name)
-            dfs.append(df_copy)
-        if dfs:
-            combined = pd.concat(dfs, ignore_index=True)
-            combined.to_csv(output_csv_path, index=False)
-            return False, "Template file not found. Saved simple combined CSV."
-        return False, "No data to compile."
-        
     try:
+        if not os.path.exists(template_path):
+            # Fallback to simple concatenation if template is missing
+            dfs = []
+            for name, res_df in processed_data.items():
+                df_copy = res_df.copy()
+                df_copy.insert(0, 'image_name', name)
+                dfs.append(df_copy)
+            if dfs:
+                combined = pd.concat(dfs, ignore_index=True)
+                combined.to_csv(output_csv_path, index=False)
+                return False, "Template file not found. Saved simple combined CSV."
+            return False, "No data to compile."
+            
         wb = openpyxl.load_workbook(template_path, data_only=True)
         sheet = wb['Sheet1']
         
