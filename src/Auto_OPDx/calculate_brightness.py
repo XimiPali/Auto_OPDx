@@ -82,11 +82,11 @@ def get_top_n_peaks_nms(projection, n, min_dist=30):
             
     return np.array(centers[:n])
 
-def refine_centroid_locally(gray_tophat, cx, cy, window_size=60):
+def refine_centroid_locally(gray_tophat, cx, cy, window_size=60, refinement_method='contour'):
     """
     Refines a centroid coordinate (cx, cy) by using morphological closing to fill
-    in the square features, and then calculating the centers using the local area
-    horizontal and vertical projections of the morphology results.
+    in the square features, and then calculating the centers using either the contour
+    moments centroid or the local area horizontal and vertical projections.
     """
     half_w = window_size // 2
     
@@ -119,37 +119,49 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60):
     # Crop back to the original size
     closed = closed_padded[ksize:-ksize, ksize:-ksize]
     
-    # Shape-based square center finding
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    best_contour = None
-    min_dist_to_center = float('inf')
-    center_local_x = (x_max - x_min) / 2.0
-    center_local_y = (y_max - y_min) / 2.0
-    
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 20:
-            continue
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        bcx = bx + bw / 2.0
-        bcy = by + bh / 2.0
+    if refinement_method == 'contour':
+        # Shape-based square center finding
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        dist = (bcx - center_local_x)**2 + (bcy - center_local_y)**2
-        if dist < min_dist_to_center:
-            min_dist_to_center = dist
-            best_contour = cnt
+        best_contour = None
+        min_dist_to_center = float('inf')
+        center_local_x = (x_max - x_min) / 2.0
+        center_local_y = (y_max - y_min) / 2.0
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < 20:
+                continue
             
-    if best_contour is not None:
-        bx, by, bw, bh = cv2.boundingRect(best_contour)
-        cx_local = bx + bw / 2.0
-        cy_local = by + bh / 2.0
-        refined_cx = x_min + int(round(cx_local))
-        refined_cy = y_min + int(round(cy_local))
-        return refined_cx, refined_cy
-        
-    # Compute horizontal and vertical projections of the morphology results (fallback)
-    # proj_y is the row sums (y-profile), proj_x is the column sums (x-profile)
+            M = cv2.moments(cnt)
+            if M["m00"] != 0:
+                bcx = M["m10"] / M["m00"]
+                bcy = M["m01"] / M["m00"]
+            else:
+                bx, by, bw, bh = cv2.boundingRect(cnt)
+                bcx = bx + bw / 2.0
+                bcy = by + bh / 2.0
+                
+            dist = (bcx - center_local_x)**2 + (bcy - center_local_y)**2
+            if dist < min_dist_to_center:
+                min_dist_to_center = dist
+                best_contour = cnt
+                
+        if best_contour is not None:
+            M = cv2.moments(best_contour)
+            if M["m00"] != 0:
+                cx_local = M["m10"] / M["m00"]
+                cy_local = M["m01"] / M["m00"]
+            else:
+                bx, by, bw, bh = cv2.boundingRect(best_contour)
+                cx_local = bx + bw / 2.0
+                cy_local = by + bh / 2.0
+                
+            refined_cx = x_min + int(round(cx_local))
+            refined_cy = y_min + int(round(cy_local))
+            return refined_cx, refined_cy
+            
+    # Compute horizontal and vertical projections of the morphology results (fallback or direct projection)
     proj_y = np.sum(closed, axis=1)
     proj_x = np.sum(closed, axis=0)
     
@@ -177,7 +189,7 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60):
     
     return refined_cx, refined_cy
 
-def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed'):
+def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
     """
     Runs the complete fluorescence grid finding, centroid refinement, and spot stats extraction.
     """
@@ -212,7 +224,7 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle
             global_row.append((cx, cy))
             
             # Local 80x80 refinement
-            refined_cx, refined_cy = refine_centroid_locally(gray_tophat, cx, cy, window_size=80)
+            refined_cx, refined_cy = refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_method=refinement_method)
             row_centers.append((refined_cx, refined_cy))
             
         feature_centers.append(row_centers)
