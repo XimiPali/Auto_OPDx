@@ -84,7 +84,9 @@ def get_top_n_peaks_nms(projection, n, min_dist=30):
 
 def refine_centroid_locally(gray_tophat, cx, cy, window_size=60):
     """
-    Refines a centroid coordinate (cx, cy) using 1D projections in a local window.
+    Refines a centroid coordinate (cx, cy) by using morphological closing to fill
+    in the square features, and then calculating the centers using the local area
+    horizontal and vertical projections of the morphology results.
     """
     half_w = window_size // 2
     
@@ -96,43 +98,86 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60):
     
     local_region = gray_tophat[y_min:y_max, x_min:x_max]
     
-    # Refine Y (Row Index) using local horizontal projection (summing across rows, i.e., axis=1)
-    local_horizontal = np.sum(local_region, axis=1)
-    if len(local_horizontal) > 0:
-        p_y = np.argmax(local_horizontal)
-        val_y = local_horizontal[p_y]
-        thresh_y = val_y * 0.15
+    # If the local region is empty, has low contrast, or has low maximum intensity (background noise), return original guess
+    if local_region.size == 0 or np.max(local_region) < 10 or np.max(local_region) - np.min(local_region) < 5:
+        return cx, cy
         
-        left_y = p_y
-        while left_y > 0 and local_horizontal[left_y] > thresh_y:
-            left_y -= 1
-        right_y = p_y
-        while right_y < len(local_horizontal) - 1 and local_horizontal[right_y] > thresh_y:
-            right_y += 1
-        refined_cy = y_min + (left_y + right_y) // 2
-    else:
-        refined_cy = cy
+    # Ensure it's uint8 for OpenCV image operations
+    local_region_u8 = local_region.astype(np.uint8)
+    
+    # Pad the local region with zeros to prevent edge truncation during large morphological operations
+    ksize = max(5, int(window_size // 2) | 1)
+    padded = cv2.copyMakeBorder(local_region_u8, ksize, ksize, ksize, ksize, cv2.BORDER_CONSTANT, value=0)
+    
+    # Binarize the padded region to isolate bright features
+    _, thresh = cv2.threshold(padded, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Use morphological closing with a large kernel to completely fill in the square features
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+    closed_padded = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    # Crop back to the original size
+    closed = closed_padded[ksize:-ksize, ksize:-ksize]
+    
+    # Shape-based square center finding
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    best_contour = None
+    min_dist_to_center = float('inf')
+    center_local_x = (x_max - x_min) / 2.0
+    center_local_y = (y_max - y_min) / 2.0
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 20:
+            continue
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        bcx = bx + bw / 2.0
+        bcy = by + bh / 2.0
         
-    # Refine X (Column Index) using local vertical projection (summing across columns, i.e., axis=0)
-    local_vertical = np.sum(local_region, axis=0)
-    if len(local_vertical) > 0:
-        p_x = np.argmax(local_vertical)
-        val_x = local_vertical[p_x]
-        thresh_x = val_x * 0.15
+        dist = (bcx - center_local_x)**2 + (bcy - center_local_y)**2
+        if dist < min_dist_to_center:
+            min_dist_to_center = dist
+            best_contour = cnt
+            
+    if best_contour is not None:
+        bx, by, bw, bh = cv2.boundingRect(best_contour)
+        cx_local = bx + bw / 2.0
+        cy_local = by + bh / 2.0
+        refined_cx = x_min + int(round(cx_local))
+        refined_cy = y_min + int(round(cy_local))
+        return refined_cx, refined_cy
         
-        left_x = p_x
-        while left_x > 0 and local_vertical[left_x] > thresh_x:
-            left_x -= 1
-        right_x = p_x
-        while right_x < len(local_vertical) - 1 and local_vertical[right_x] > thresh_x:
-            right_x += 1
-        refined_cx = x_min + (left_x + right_x) // 2
-    else:
-        refined_cx = cx
+    # Compute horizontal and vertical projections of the morphology results (fallback)
+    # proj_y is the row sums (y-profile), proj_x is the column sums (x-profile)
+    proj_y = np.sum(closed, axis=1)
+    proj_x = np.sum(closed, axis=0)
+    
+    # Use the peak boundary midpoint method to find the center of the main projection peak
+    def get_peak_center(proj, fallback_val):
+        p = np.argmax(proj)
+        val = proj[p]
+        if val == 0:
+            return fallback_val
+        # Threshold at 15% of the peak value
+        thresh_val = val * 0.15
+        left = p
+        while left > 0 and proj[left] > thresh_val:
+            left -= 1
+        right = p
+        while right < len(proj) - 1 and proj[right] > thresh_val:
+            right += 1
+        return (left + right) / 2.0
         
+    cy_local = get_peak_center(proj_y, cy - y_min)
+    cx_local = get_peak_center(proj_x, cx - x_min)
+    
+    refined_cx = x_min + int(round(cx_local))
+    refined_cy = y_min + int(round(cy_local))
+    
     return refined_cx, refined_cy
 
-def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50):
+def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed'):
     """
     Runs the complete fluorescence grid finding, centroid refinement, and spot stats extraction.
     """
@@ -166,8 +211,8 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50):
             cx, cy = col_idx, row_idx
             global_row.append((cx, cy))
             
-            # Local 60x60 projection refinement
-            refined_cx, refined_cy = refine_centroid_locally(gray_tophat, cx, cy, window_size=60)
+            # Local 80x80 refinement
+            refined_cx, refined_cy = refine_centroid_locally(gray_tophat, cx, cy, window_size=80)
             row_centers.append((refined_cx, refined_cy))
             
         feature_centers.append(row_centers)
@@ -181,32 +226,76 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50):
         ((4, 8), (4, 8))  # Quadrant 4
     ]
     
+    if ordering == 'reversed':
+        rev_r, rev_c = True, True
+    elif ordering == 'standard':
+        rev_r, rev_c = False, False
+    elif ordering == 'p8':
+        rev_r, rev_c = False, True
+    else:
+        rev_r, rev_c = True, True
+    
     ordered_centers = []
     for col_range, row_range in quadrant_ranges:
-        for r in sorted(range(row_range[0], row_range[1]), reverse=True):
-            for c in sorted(range(col_range[0], col_range[1]), reverse=True):
+        for r in sorted(range(row_range[0], row_range[1]), reverse=rev_r):
+            for c in sorted(range(col_range[0], col_range[1]), reverse=rev_c):
                 ordered_centers.append(feature_centers[r][c])
                 
     # 6. Extract region stats on (r+g+b)/3 uint8 average grayscale image
     results = []
-    hw = box_size // 2
-    hh = box_size // 2
+    
+    # Construct circular mask if use_circle_mask is enabled
+    if use_circle_mask:
+        w = box_size
+        y_grid, x_grid = np.ogrid[:w, :w]
+        if w == 51:
+            cx_mask, cy_mask = 25.5, 25.5
+            radius = 30.0
+        else:
+            cx_mask = (w - 1) / 2.0
+            cy_mask = (w - 1) / 2.0
+            radius = 30.0 * (w / 51.0)
+        mask = (x_grid - cx_mask)**2 + (y_grid - cy_mask)**2 <= radius**2
+        area_val = int(np.sum(mask))
+    else:
+        area_val = box_size * box_size
     
     for i, (cx, cy) in enumerate(ordered_centers):
-        x_min = max(0, cx - hw)
-        x_max = min(img_rgb.shape[1], cx + hw)
-        y_min = max(0, cy - hh)
-        y_max = min(img_rgb.shape[0], cy + hh)
+        x_min = max(0, cx - box_size // 2)
+        x_max = min(img_rgb.shape[1], cx - box_size // 2 + box_size)
+        y_min = max(0, cy - box_size // 2)
+        y_max = min(img_rgb.shape[0], cy - box_size // 2 + box_size)
         
         region_rgb = img_rgb[y_min:y_max, x_min:x_max].astype(float)
         if region_rgb.size == 0:
             mean_val, std_val, min_val, max_val = 0.0, 0.0, 0.0, 0.0
+            actual_area = 0
         else:
             region = np.mean(region_rgb, axis=2).astype(np.uint8)
-            mean_val = np.mean(region)
-            std_val = np.std(region)
-            min_val = np.min(region)
-            max_val = np.max(region)
+            if use_circle_mask:
+                if region.shape == (box_size, box_size):
+                    pixels = region[mask]
+                    actual_area = area_val
+                else:
+                    # Handle boundaries by cropping mask
+                    mask_y_min = max(0, - (cy - box_size // 2))
+                    mask_y_max = mask_y_min + region.shape[0]
+                    mask_x_min = max(0, - (cx - box_size // 2))
+                    mask_x_max = mask_x_min + region.shape[1]
+                    cropped_mask = mask[mask_y_min:mask_y_max, mask_x_min:mask_x_max]
+                    pixels = region[cropped_mask]
+                    actual_area = int(np.sum(cropped_mask))
+            else:
+                pixels = region
+                actual_area = region.size
+                
+            if pixels.size == 0:
+                mean_val, std_val, min_val, max_val = 0.0, 0.0, 0.0, 0.0
+            else:
+                mean_val = np.mean(pixels)
+                std_val = np.std(pixels)
+                min_val = np.min(pixels)
+                max_val = np.max(pixels)
             
         results.append({
             'component_id': i + 1,
@@ -215,7 +304,8 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50):
             'mean_brightness': mean_val,
             'std_deviation': std_val,
             'min_value': min_val,
-            'max_value': max_val
+            'max_value': max_val,
+            'area': actual_area
         })
         
     df_fluorescence = pd.DataFrame(results)
@@ -246,9 +336,10 @@ def compile_fluorescence_results(template_path, processed_data, output_csv_path,
                 writer.writerow(["Num", "Area", "Mean", "StdDev", "Min", "Max"])
                 
                 for i, row in df_flu.iterrows():
+                    row_area = int(row['area']) if 'area' in row else area_val
                     writer.writerow([
                         int(row['component_id']),
-                        area_val,
+                        row_area,
                         f"{row['mean_brightness']:.6f}" if isinstance(row['mean_brightness'], float) else row['mean_brightness'],
                         f"{row['std_deviation']:.6f}" if isinstance(row['std_deviation'], float) else row['std_deviation'],
                         f"{row['min_value']:.6f}" if isinstance(row['min_value'], float) else row['min_value'],

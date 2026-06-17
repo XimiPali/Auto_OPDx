@@ -13,7 +13,7 @@ import matplotlib.patches as patches
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QLineEdit, QPushButton, QFileDialog, 
                              QSpinBox, QTextEdit, QMessageBox, QListWidget, QListWidgetItem,
-                             QSizePolicy, QComboBox)
+                             QSizePolicy, QComboBox, QCheckBox)
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QImage, QPixmap, QIcon
 
@@ -88,9 +88,30 @@ class ProfilometryApp(QWidget):
         self.box_size_layout.addWidget(self.box_size_input)
         layout.addLayout(self.box_size_layout)
         
-        # Hide box size controls by default (Profilometry Mode)
+        # Circular Mask Control (only visible in Fluorescence Mode)
+        self.mask_layout = QHBoxLayout()
+        self.circle_mask_checkbox = QCheckBox("Use Circular Mask")
+        self.circle_mask_checkbox.setChecked(False)
+        self.circle_mask_checkbox.stateChanged.connect(self.on_mask_changed)
+        self.mask_layout.addWidget(self.circle_mask_checkbox)
+        layout.addLayout(self.mask_layout)
+        
+        # Spot Ordering Control (only visible in Fluorescence Mode)
+        self.ordering_layout = QHBoxLayout()
+        self.ordering_label = QLabel("Spot Ordering:")
+        self.ordering_dropdown = QComboBox()
+        self.ordering_dropdown.addItems(["reversed", "standard", "p8"])
+        self.ordering_dropdown.currentIndexChanged.connect(self.on_ordering_changed)
+        self.ordering_layout.addWidget(self.ordering_label)
+        self.ordering_layout.addWidget(self.ordering_dropdown)
+        layout.addLayout(self.ordering_layout)
+        
+        # Hide box size and advanced controls by default (Profilometry Mode)
         self.box_size_label.hide()
         self.box_size_input.hide()
+        self.circle_mask_checkbox.hide()
+        self.ordering_label.hide()
+        self.ordering_dropdown.hide()
         
         # 3. Output CSV Selection
         csv_layout = QHBoxLayout()
@@ -163,6 +184,9 @@ class ProfilometryApp(QWidget):
             self.file_label.setText("OPDx Files:")
             self.box_size_label.hide()
             self.box_size_input.hide()
+            self.circle_mask_checkbox.hide()
+            self.ordering_label.hide()
+            self.ordering_dropdown.hide()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("sample_heights.csv")
             self.log("Switched to Profilometry Mode (OPDx).")
@@ -171,14 +195,30 @@ class ProfilometryApp(QWidget):
             self.file_label.setText("Fluorescence Images:")
             self.box_size_label.show()
             self.box_size_input.show()
+            self.circle_mask_checkbox.show()
+            self.ordering_label.show()
+            self.ordering_dropdown.show()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("compiled_fluorescence_results.csv")
             self.log("Switched to Fluorescence Mode (JPG/PNG).")
             
+    def reload_previews(self):
+        files_text = self.file_input.text()
+        if files_text:
+            files = [f.strip() for f in files_text.split(";") if f.strip()]
+            self.update_visualizations(files)
+
     def on_box_size_changed(self):
         """Called when bounding box size is modified."""
-        # Instantly redraw the visualization with the new green bounding boxes
-        self.display_selected_visualization()
+        self.reload_previews()
+
+    def on_mask_changed(self, state):
+        """Called when circular mask option is toggled."""
+        self.reload_previews()
+
+    def on_ordering_changed(self, index):
+        """Called when ordering convention is changed."""
+        self.reload_previews()
 
     def browse_files(self):
         is_fluorescence = self.mode_dropdown.currentIndex() == 1
@@ -231,8 +271,11 @@ class ProfilometryApp(QWidget):
                     rows = self.rows_input.value()
                     cols = self.cols_input.value()
                     box_size = self.box_size_input.value()
+                    use_circle_mask = self.circle_mask_checkbox.isChecked()
+                    ordering = self.ordering_dropdown.currentText()
                     
-                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size)
+                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size,
+                                                     use_circle_mask=use_circle_mask, ordering=ordering)
                     self.cached_fluorescence[filepath] = res
                     
                     # Create thumbnail from the raw color image
@@ -317,13 +360,26 @@ class ProfilometryApp(QWidget):
                         ax.scatter(r_cx, r_cy, color='red', marker='o', s=10, label=label_r)
                         first_refined = False
                         
-                        # Plot dynamic green bounding boxes
+                        # Plot dynamic green bounding boxes or circular masks
                         x_min = max(0, r_cx - hw)
                         y_min = max(0, r_cy - hh)
                         
-                        label_b = f"Bounding Box ({box_size}x{box_size})" if first_box else ""
-                        rect = patches.Rectangle((x_min, y_min), box_size, box_size, linewidth=1.5, edgecolor='lime', facecolor='none', label=label_b)
-                        ax.add_patch(rect)
+                        if self.circle_mask_checkbox.isChecked():
+                            if box_size == 51:
+                                radius = 30.0
+                                c_cx = r_cx + 0.5
+                                c_cy = r_cy + 0.5
+                            else:
+                                radius = 30.0 * (box_size / 51.0)
+                                c_cx = r_cx
+                                c_cy = r_cy
+                            label_b = f"Circular Mask (r={radius:.1f})" if first_box else ""
+                            circ = patches.Circle((c_cx, c_cy), radius, linewidth=1.5, edgecolor='lime', facecolor='none', label=label_b)
+                            ax.add_patch(circ)
+                        else:
+                            label_b = f"Bounding Box ({box_size}x{box_size})" if first_box else ""
+                            rect = patches.Rectangle((x_min, y_min), box_size, box_size, linewidth=1.5, edgecolor='lime', facecolor='none', label=label_b)
+                            ax.add_patch(rect)
                         first_box = False
                 
                 ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), borderaxespad=0.)
@@ -420,12 +476,15 @@ class ProfilometryApp(QWidget):
         else:
             self.log("Starting Fluorescence Brightness Extraction...")
             box_size = self.box_size_input.value()
+            use_circle_mask = self.circle_mask_checkbox.isChecked()
+            ordering = self.ordering_dropdown.currentText()
             processed_data = {}
 
             for filepath in files:
                 self.log(f"Processing image: {filepath}...")
                 try:
-                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size)
+                    res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size,
+                                                     use_circle_mask=use_circle_mask, ordering=ordering)
                     df_flu = res['df']
                     img_base_name = os.path.splitext(os.path.basename(filepath))[0]
                     processed_data[img_base_name] = df_flu
@@ -441,9 +500,10 @@ class ProfilometryApp(QWidget):
                         writer.writerow([img_base_name])
                         writer.writerow(["Num", "Area", "Mean", "StdDev", "Min", "Max"])
                         for i, row in df_flu.iterrows():
+                            row_area = int(row['area']) if 'area' in row else area_val
                             writer.writerow([
                                 int(row['component_id']),
-                                area_val,
+                                row_area,
                                 f"{row['mean_brightness']:.6f}" if isinstance(row['mean_brightness'], float) else row['mean_brightness'],
                                 f"{row['std_deviation']:.6f}" if isinstance(row['std_deviation'], float) else row['std_deviation'],
                                 f"{row['min_value']:.6f}" if isinstance(row['min_value'], float) else row['min_value'],
