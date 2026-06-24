@@ -96,17 +96,20 @@ def _get_local_mean_intensity(img, cx, cy, box_w=20):
         return 0.0
     return float(np.mean(region))
 
-def _compute_alignment_confidence(mean_val, dist):
+def _compute_alignment_confidence(mean_val, dist_to_grid, dist_to_corner=0.0, aspect_ratio=1.0):
     """
-    Calculates alignment confidence score.
-    Higher local intensity means better centered, while high distance from grid is penalized.
+    Calculates alignment confidence score incorporating corner alignment and aspect ratio.
     """
-    penalty = 0.0
-    if dist > 15:
-        penalty = (dist - 15) * 2.0
-    if dist > 30:
-        penalty += 100.0
-    return mean_val - penalty
+    penalty_corner = dist_to_corner * 1.5
+    penalty_ar = (aspect_ratio - 1.0) * 15.0
+    
+    penalty_grid = 0.0
+    if dist_to_grid > 15:
+        penalty_grid = (dist_to_grid - 15) * 2.0
+    if dist_to_grid > 30:
+        penalty_grid += 100.0
+        
+    return mean_val - penalty_corner - penalty_ar - penalty_grid
 
 def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_method='contour'):
     """
@@ -222,11 +225,30 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
         
     if refinement_method == 'best':
         if ccx is not None:
-            dist_c = np.sqrt((ccx - cx)**2 + (ccy - cy)**2)
-            conf_c = _compute_alignment_confidence(_get_local_mean_intensity(gray_tophat, ccx, ccy, 20), dist_c)
+            # Fit minimum area rectangle to locate corner center and aspect ratio
+            rect = cv2.minAreaRect(best_contour)
+            corner_cx = x_min + rect[0][0]
+            corner_cy = y_min + rect[0][1]
+            w, h = rect[1]
+            aspect_ratio = max(w, h) / (min(w, h) + 1e-5)
+
+            dist_c_grid = np.sqrt((ccx - cx)**2 + (ccy - cy)**2)
+            dist_c_corner = np.sqrt((ccx - corner_cx)**2 + (ccy - corner_cy)**2)
+            conf_c = _compute_alignment_confidence(
+                _get_local_mean_intensity(gray_tophat, ccx, ccy, 20),
+                dist_c_grid,
+                dist_c_corner,
+                aspect_ratio
+            )
             
-            dist_p = np.sqrt((pcx - cx)**2 + (pcy - cy)**2)
-            conf_p = _compute_alignment_confidence(_get_local_mean_intensity(gray_tophat, pcx, pcy, 20), dist_p)
+            dist_p_grid = np.sqrt((pcx - cx)**2 + (pcy - cy)**2)
+            dist_p_corner = np.sqrt((pcx - corner_cx)**2 + (pcy - corner_cy)**2)
+            conf_p = _compute_alignment_confidence(
+                _get_local_mean_intensity(gray_tophat, pcx, pcy, 20),
+                dist_p_grid,
+                dist_p_corner,
+                aspect_ratio
+            )
             
             if conf_c >= conf_p:
                 return ccx, ccy
