@@ -82,11 +82,38 @@ def get_top_n_peaks_nms(projection, n, min_dist=30):
             
     return np.array(centers[:n])
 
-def refine_centroid_locally(gray_tophat, cx, cy, window_size=60, refinement_method='contour'):
+def _get_local_mean_intensity(img, cx, cy, box_w=20):
+    """
+    Computes the mean pixel intensity of a image region of size box_w x box_w centered at (cx, cy).
+    """
+    hw = box_w // 2
+    x_min = max(0, cx - hw)
+    x_max = min(img.shape[1], cx + hw)
+    y_min = max(0, cy - hw)
+    y_max = min(img.shape[0], cy + hw)
+    region = img[y_min:y_max, x_min:x_max]
+    if region.size == 0:
+        return 0.0
+    return float(np.mean(region))
+
+def _compute_alignment_confidence(mean_val, dist):
+    """
+    Calculates alignment confidence score.
+    Higher local intensity means better centered, while high distance from grid is penalized.
+    """
+    penalty = 0.0
+    if dist > 15:
+        penalty = (dist - 15) * 2.0
+    if dist > 30:
+        penalty += 100.0
+    return mean_val - penalty
+
+def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_method='contour'):
     """
     Refines a centroid coordinate (cx, cy) by using morphological closing to fill
     in the square features, and then calculating the centers using either the contour
-    moments centroid or the local area horizontal and vertical projections.
+    moments centroid, the local area horizontal and vertical projections, or a dynamic
+    'best' confidence scoring selection.
     """
     half_w = window_size // 2
     
@@ -119,7 +146,8 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60, refinement_meth
     # Crop back to the original size
     closed = closed_padded[ksize:-ksize, ksize:-ksize]
     
-    if refinement_method == 'contour':
+    ccx, ccy = None, None
+    if refinement_method in ('contour', 'best'):
         # Shape-based square center finding
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
@@ -157,9 +185,11 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60, refinement_meth
                 cx_local = bx + bw / 2.0
                 cy_local = by + bh / 2.0
                 
-            refined_cx = x_min + int(round(cx_local))
-            refined_cy = y_min + int(round(cy_local))
-            return refined_cx, refined_cy
+            ccx = x_min + int(round(cx_local))
+            ccy = y_min + int(round(cy_local))
+            
+            if refinement_method == 'contour':
+                return ccx, ccy
             
     # Compute horizontal and vertical projections of the morphology results (fallback or direct projection)
     proj_y = np.sum(closed, axis=1)
@@ -184,10 +214,28 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=60, refinement_meth
     cy_local = get_peak_center(proj_y, cy - y_min)
     cx_local = get_peak_center(proj_x, cx - x_min)
     
-    refined_cx = x_min + int(round(cx_local))
-    refined_cy = y_min + int(round(cy_local))
+    pcx = x_min + int(round(cx_local))
+    pcy = y_min + int(round(cy_local))
     
-    return refined_cx, refined_cy
+    if refinement_method == 'projection':
+        return pcx, pcy
+        
+    if refinement_method == 'best':
+        if ccx is not None:
+            dist_c = np.sqrt((ccx - cx)**2 + (ccy - cy)**2)
+            conf_c = _compute_alignment_confidence(_get_local_mean_intensity(gray_tophat, ccx, ccy, 20), dist_c)
+            
+            dist_p = np.sqrt((pcx - cx)**2 + (pcy - cy)**2)
+            conf_p = _compute_alignment_confidence(_get_local_mean_intensity(gray_tophat, pcx, pcy, 20), dist_p)
+            
+            if conf_c >= conf_p:
+                return ccx, ccy
+            else:
+                return pcx, pcy
+        else:
+            return pcx, pcy
+            
+    return pcx, pcy
 
 def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
     """

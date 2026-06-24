@@ -110,7 +110,7 @@ class ProfilometryApp(QWidget):
         self.refinement_layout = QHBoxLayout()
         self.refinement_label = QLabel("Refinement Method:")
         self.refinement_dropdown = QComboBox()
-        self.refinement_dropdown.addItems(["contour", "projection"])
+        self.refinement_dropdown.addItems(["contour", "projection", "best"])
         self.refinement_dropdown.currentIndexChanged.connect(self.on_refinement_method_changed)
         self.refinement_layout.addWidget(self.refinement_label)
         self.refinement_layout.addWidget(self.refinement_dropdown)
