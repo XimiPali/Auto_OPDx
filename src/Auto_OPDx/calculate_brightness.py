@@ -100,7 +100,7 @@ def _compute_alignment_confidence(mean_val, dist_to_grid, dist_to_corner=0.0, as
     """
     Calculates alignment confidence score incorporating corner alignment and aspect ratio.
     """
-    penalty_corner = dist_to_corner * 1.5
+    penalty_corner = dist_to_corner * 2.0
     penalty_ar = (aspect_ratio - 1.0) * 15.0
     
     penalty_grid = 0.0
@@ -277,12 +277,24 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
         pcy_g = y_min + int(round(cy_l_p_g))
         candidates.append((pcx_g, pcy_g, "Projection_Gray"))
         
-        # Fit minimum area rectangle to locate corner center and aspect ratio from best morphological contour (common reference)
-        if best_contour is not None:
-            rect = cv2.minAreaRect(best_contour)
-            corner_cx = x_min + rect[0][0]
-            corner_cy = y_min + rect[0][1]
-            w, h = rect[1]
+        # Fit minimum area rectangle to locate corner center and aspect ratio from best morphological contour
+        # Fall back to unclosed grayscale contour if closed contour is distorted (e.g., merged with noise)
+        rect_b = cv2.minAreaRect(best_contour) if best_contour is not None else None
+        rect_g = cv2.minAreaRect(best_contour_g) if best_contour_g is not None else None
+        
+        ar_b = max(rect_b[1]) / (min(rect_b[1]) + 1e-5) if rect_b is not None else 999.0
+        ar_g = max(rect_g[1]) / (min(rect_g[1]) + 1e-5) if rect_g is not None else 999.0
+        
+        use_g = False
+        if rect_g is not None and ar_g < 1.8:
+            if rect_b is None or ar_b >= 1.8 or abs(ar_g - 1.0) < abs(ar_b - 1.0):
+                use_g = True
+                
+        chosen_rect = rect_g if use_g else rect_b
+        if chosen_rect is not None:
+            corner_cx = x_min + chosen_rect[0][0]
+            corner_cy = y_min + chosen_rect[0][1]
+            w, h = chosen_rect[1]
             aspect_ratio = max(w, h) / (min(w, h) + 1e-5)
         else:
             corner_cx, corner_cy, aspect_ratio = None, None, 1.0
@@ -313,6 +325,69 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
         
     return pcx, pcy
 
+def fit_robust_grid(projection, n_lines=8, is_horizontal=True):
+    """
+    Fits a robust grid model to a 1D projection array using the physical spacing
+    and gap constraints of the chip.
+    """
+    if is_horizontal:
+        s_range = range(115, 140)
+        g_range = range(180, 230)
+        max_offset = 150
+    else:
+        s_range = range(150, 180)
+        g_range = range(190, 225)
+        max_offset = 100
+        
+    best_score = -1
+    best_params = None
+    smoothed = np.convolve(projection, np.ones(5)/5.0, mode='same')
+    
+    for s in s_range:
+        for g in g_range:
+            for offset in range(10, max_offset):
+                lines = []
+                for i in range(n_lines):
+                    if i < 4:
+                        pos = offset + i * s
+                    else:
+                        pos = offset + 3 * s + g + (i - 4) * s
+                    lines.append(int(round(pos)))
+                
+                if any(p < 0 or p >= len(projection) for p in lines):
+                    continue
+                    
+                score = 0
+                for p in lines:
+                    w_min = max(0, p - 5)
+                    w_max = min(len(projection), p + 6)
+                    score += np.sum(smoothed[w_min:w_max])
+                    
+                if score > best_score:
+                    best_score = score
+                    best_params = lines
+                    
+    if best_params is None:
+        return np.linspace(0, len(projection) - 1, n_lines, dtype=int)
+        
+    return np.array(best_params)
+
+def refine_grid_lines_locally(projection, coarse_lines, search_radius=10):
+    """
+    Refines coarse grid line positions locally by finding the peak in vertical/horizontal
+    projection in a small window, accounting for minor lens distortion or chip tilt.
+    """
+    refined_lines = []
+    smoothed = np.convolve(projection, np.ones(5)/5.0, mode='same')
+    for line in coarse_lines:
+        w_min = max(0, line - search_radius)
+        w_max = min(len(projection), line + search_radius + 1)
+        sub_proj = smoothed[w_min:w_max]
+        local_peak_idx = np.argmax(sub_proj)
+        refined_val = w_min + local_peak_idx
+        refined_lines.append(refined_val)
+    return np.array(refined_lines)
+
 def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
     """
     Runs the complete fluorescence grid finding, centroid refinement, and spot stats extraction.
@@ -330,12 +405,15 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle
     img_tophat = cv2.morphologyEx(img_median, cv2.MORPH_TOPHAT, kernel)
     gray_tophat = cv2.cvtColor(img_tophat, cv2.COLOR_RGB2GRAY)
     
-    # 3. Global projections & peaks (NMS)
+    # 3. Global projections & Hybrid Robust Grid Fitting
     horizontal_projection = np.sum(gray_tophat, axis=1)
     vertical_projection = np.sum(gray_tophat, axis=0)
     
-    h_centers = get_top_n_peaks_nms(horizontal_projection, rows, min_dist=30)
-    v_centers = get_top_n_peaks_nms(vertical_projection, cols, min_dist=30)
+    h_coarse = fit_robust_grid(horizontal_projection, rows, is_horizontal=True)
+    v_coarse = fit_robust_grid(vertical_projection, cols, is_horizontal=False)
+    
+    h_centers = refine_grid_lines_locally(horizontal_projection, h_coarse, search_radius=10)
+    v_centers = refine_grid_lines_locally(vertical_projection, v_coarse, search_radius=10)
     
     # 4. Grid intersections & Local Refinement
     feature_centers = []

@@ -106,24 +106,12 @@ class ProfilometryApp(QWidget):
         self.ordering_layout.addWidget(self.ordering_dropdown)
         layout.addLayout(self.ordering_layout)
         
-        # Refinement Method Control (only visible in Fluorescence Mode)
-        self.refinement_layout = QHBoxLayout()
-        self.refinement_label = QLabel("Refinement Method:")
-        self.refinement_dropdown = QComboBox()
-        self.refinement_dropdown.addItems(["contour", "projection", "best"])
-        self.refinement_dropdown.currentIndexChanged.connect(self.on_refinement_method_changed)
-        self.refinement_layout.addWidget(self.refinement_label)
-        self.refinement_layout.addWidget(self.refinement_dropdown)
-        layout.addLayout(self.refinement_layout)
-        
         # Hide box size and advanced controls by default (Profilometry Mode)
         self.box_size_label.hide()
         self.box_size_input.hide()
         self.circle_mask_checkbox.hide()
         self.ordering_label.hide()
         self.ordering_dropdown.hide()
-        self.refinement_label.hide()
-        self.refinement_dropdown.hide()
         
         # 3. Output CSV Selection
         csv_layout = QHBoxLayout()
@@ -199,8 +187,6 @@ class ProfilometryApp(QWidget):
             self.circle_mask_checkbox.hide()
             self.ordering_label.hide()
             self.ordering_dropdown.hide()
-            self.refinement_label.hide()
-            self.refinement_dropdown.hide()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("sample_heights.csv")
             self.log("Switched to Profilometry Mode (OPDx).")
@@ -212,8 +198,6 @@ class ProfilometryApp(QWidget):
             self.circle_mask_checkbox.show()
             self.ordering_label.show()
             self.ordering_dropdown.show()
-            self.refinement_label.show()
-            self.refinement_dropdown.show()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("compiled_fluorescence_results.csv")
             self.log("Switched to Fluorescence Mode (JPG/PNG).")
@@ -236,9 +220,6 @@ class ProfilometryApp(QWidget):
         """Called when ordering convention is changed."""
         self.reload_previews()
 
-    def on_refinement_method_changed(self, index):
-        """Called when refinement method is changed."""
-        self.reload_previews()
 
     def browse_files(self):
         is_fluorescence = self.mode_dropdown.currentIndex() == 1
@@ -293,7 +274,7 @@ class ProfilometryApp(QWidget):
                     box_size = self.box_size_input.value()
                     use_circle_mask = self.circle_mask_checkbox.isChecked()
                     ordering = self.ordering_dropdown.currentText()
-                    refinement_method = self.refinement_dropdown.currentText()
+                    refinement_method = 'best'
                     
                     res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size,
                                                      use_circle_mask=use_circle_mask, ordering=ordering,
@@ -500,7 +481,7 @@ class ProfilometryApp(QWidget):
             box_size = self.box_size_input.value()
             use_circle_mask = self.circle_mask_checkbox.isChecked()
             ordering = self.ordering_dropdown.currentText()
-            refinement_method = self.refinement_dropdown.currentText()
+            refinement_method = 'best'
             processed_data = {}
 
             for filepath in files:
