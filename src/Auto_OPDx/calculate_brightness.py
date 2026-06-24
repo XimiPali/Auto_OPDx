@@ -96,12 +96,15 @@ def _get_local_mean_intensity(img, cx, cy, box_w=20):
         return 0.0
     return float(np.mean(region))
 
-def _compute_alignment_confidence(mean_val, dist_to_grid, dist_to_corner=0.0, aspect_ratio=1.0):
+def _compute_alignment_confidence(mean_val, dist_to_grid, dist_to_corner=0.0, aspect_ratio=1.0, dist_to_consensus=0.0):
     """
-    Calculates alignment confidence score incorporating corner alignment and aspect ratio.
+    Calculates alignment confidence score incorporating corner alignment, aspect ratio,
+    and candidate consensus. The consensus penalty penalizes outlier candidates that
+    disagree with the majority position (median of all candidates).
     """
     penalty_corner = dist_to_corner * 2.0
     penalty_ar = (aspect_ratio - 1.0) * 15.0
+    penalty_consensus = dist_to_consensus * 1.0
     
     penalty_grid = 0.0
     if dist_to_grid > 15:
@@ -109,7 +112,7 @@ def _compute_alignment_confidence(mean_val, dist_to_grid, dist_to_corner=0.0, as
     if dist_to_grid > 30:
         penalty_grid += 100.0
         
-    return mean_val - penalty_corner - penalty_ar - penalty_grid
+    return mean_val - penalty_corner - penalty_ar - penalty_grid - penalty_consensus
 
 def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_method='contour'):
     """
@@ -299,6 +302,13 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
         else:
             corner_cx, corner_cy, aspect_ratio = None, None, 1.0
             
+        # Candidate consensus: compute median position of all candidates.
+        # Outlier candidates that deviate from the majority get penalized.
+        cand_xs = [c[0] for c in candidates]
+        cand_ys = [c[1] for c in candidates]
+        median_x = np.median(cand_xs)
+        median_y = np.median(cand_ys)
+        
         best_cand = (pcx, pcy)
         best_score = -float('inf')
         
@@ -309,12 +319,15 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
                 dist_to_corner = np.sqrt((cand_x - corner_cx)**2 + (cand_y - corner_cy)**2)
             else:
                 dist_to_corner = 0.0
+            
+            dist_to_consensus = np.sqrt((cand_x - median_x)**2 + (cand_y - median_y)**2)
                 
             conf = _compute_alignment_confidence(
                 _get_local_mean_intensity(gray_tophat, cand_x, cand_y, 20),
                 dist_to_grid,
                 dist_to_corner,
-                aspect_ratio if corner_cx is not None else 1.0
+                aspect_ratio if corner_cx is not None else 1.0,
+                dist_to_consensus
             )
             
             if conf > best_score:
@@ -394,6 +407,96 @@ def refine_grid_lines_locally(projection, coarse_lines, search_radius=10):
         refined_lines.append(refined_val)
     return np.array(refined_lines)
 
+def correct_centers_with_affine_ransac(feature_centers, threshold=5.0):
+    """
+    Fits a global 2D affine model to the refined spot centers using RANSAC.
+    Corrects any center that deviates from the model prediction by more than the threshold.
+    """
+    # Safety check for 8x8 layout
+    if len(feature_centers) != 8 or any(len(row) != 8 for row in feature_centers):
+        return feature_centers
+        
+    # 1. Prepare design matrix and observations
+    A = []
+    bx = []
+    by = []
+    for r_idx in range(8):
+        for c_idx in range(8):
+            rcx, rcy = feature_centers[r_idx][c_idx]
+            quad_c = 1.0 if c_idx >= 4 else 0.0
+            quad_r = 1.0 if r_idx >= 4 else 0.0
+            A.append([r_idx, c_idx, quad_r, quad_c, 1.0])
+            bx.append(rcx)
+            by.append(rcy)
+            
+    A = np.array(A)
+    bx = np.array(bx)
+    by = np.array(by)
+    
+    # 2. Run RANSAC to fit global grid model robustly against outliers
+    best_inliers_count = -1
+    best_model_x = None
+    best_model_y = None
+    
+    np.random.seed(42)  # For deterministic execution
+    for _ in range(200):
+        # Fit model on 5 random points
+        idx = np.random.choice(64, 5, replace=False)
+        try:
+            mx = np.linalg.lstsq(A[idx], bx[idx], rcond=None)[0]
+            my = np.linalg.lstsq(A[idx], by[idx], rcond=None)[0]
+        except np.linalg.LinAlgError:
+            continue
+            
+        pred_x = A @ mx
+        pred_y = A @ my
+        err = np.sqrt((bx - pred_x)**2 + (by - pred_y)**2)
+        inliers_count = np.sum(err < threshold)
+        
+        if inliers_count > best_inliers_count:
+            best_inliers_count = inliers_count
+            best_model_x = mx
+            best_model_y = my
+            
+    if best_model_x is None or best_model_y is None:
+        # Fallback to simple least squares on all points if RANSAC fails
+        mx = np.linalg.lstsq(A, bx, rcond=None)[0]
+        my = np.linalg.lstsq(A, by, rcond=None)[0]
+    else:
+        # Refit on all inliers for maximum accuracy
+        pred_x = A @ best_model_x
+        pred_y = A @ best_model_y
+        err = np.sqrt((bx - pred_x)**2 + (by - pred_y)**2)
+        inliers = err < threshold
+        # Ensure we have at least 5 inliers to refit
+        if np.sum(inliers) >= 5:
+            mx = np.linalg.lstsq(A[inliers], bx[inliers], rcond=None)[0]
+            my = np.linalg.lstsq(A[inliers], by[inliers], rcond=None)[0]
+        else:
+            mx, my = best_model_x, best_model_y
+            
+    # 3. Predict final coordinates
+    pred_x = A @ mx
+    pred_y = A @ my
+    err = np.sqrt((bx - pred_x)**2 + (by - pred_y)**2)
+    
+    # 4. Correct outliers
+    corrected_centers = []
+    for r_idx in range(8):
+        row = []
+        for c_idx in range(8):
+            idx = r_idx * 8 + c_idx
+            rcx, rcy = feature_centers[r_idx][c_idx]
+            if err[idx] > threshold:
+                new_cx = int(round(pred_x[idx]))
+                new_cy = int(round(pred_y[idx]))
+                row.append((new_cx, new_cy))
+            else:
+                row.append((rcx, rcy))
+        corrected_centers.append(row)
+        
+    return corrected_centers
+
 def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
     """
     Runs the complete fluorescence grid finding, centroid refinement, and spot stats extraction.
@@ -437,6 +540,9 @@ def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle
             
         feature_centers.append(row_centers)
         global_centers.append(global_row)
+        
+    # Apply RANSAC-fit Affine Grid Correction for robust center location
+    feature_centers = correct_centers_with_affine_ransac(feature_centers, threshold=5.0)
         
     # 5. Spot quadrant-based ordering
     quadrant_ranges = [
