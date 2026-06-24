@@ -148,7 +148,23 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
     
     # Crop back to the original size
     closed = closed_padded[ksize:-ksize, ksize:-ksize]
+    thresh_cropped = thresh[ksize:-ksize, ksize:-ksize]
     
+    # Define the peak boundary midpoint method helper
+    def get_peak_center(proj, fallback_val):
+        p = np.argmax(proj)
+        val = proj[p]
+        if val == 0:
+            return fallback_val
+        thresh_val = val * 0.15
+        left = p
+        while left > 0 and proj[left] > thresh_val:
+            left -= 1
+        right = p
+        while right < len(proj) - 1 and proj[right] > thresh_val:
+            right += 1
+        return (left + right) / 2.0
+
     ccx, ccy = None, None
     if refinement_method in ('contour', 'best'):
         # Shape-based square center finding
@@ -197,23 +213,6 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
     # Compute horizontal and vertical projections of the morphology results (fallback or direct projection)
     proj_y = np.sum(closed, axis=1)
     proj_x = np.sum(closed, axis=0)
-    
-    # Use the peak boundary midpoint method to find the center of the main projection peak
-    def get_peak_center(proj, fallback_val):
-        p = np.argmax(proj)
-        val = proj[p]
-        if val == 0:
-            return fallback_val
-        # Threshold at 15% of the peak value
-        thresh_val = val * 0.15
-        left = p
-        while left > 0 and proj[left] > thresh_val:
-            left -= 1
-        right = p
-        while right < len(proj) - 1 and proj[right] > thresh_val:
-            right += 1
-        return (left + right) / 2.0
-        
     cy_local = get_peak_center(proj_y, cy - y_min)
     cx_local = get_peak_center(proj_x, cx - x_min)
     
@@ -224,39 +223,94 @@ def refine_centroid_locally(gray_tophat, cx, cy, window_size=80, refinement_meth
         return pcx, pcy
         
     if refinement_method == 'best':
+        # 1. Contour on Binary (ccx, ccy from closed)
+        # 2. Projection on Binary (pcx, pcy from closed)
+        # 3. Contour on Grayscale (ccx_g, ccy_g from thresh_cropped)
+        # 4. Projection on Grayscale (pcx_g, pcy_g from local_region)
+        candidates = []
         if ccx is not None:
-            # Fit minimum area rectangle to locate corner center and aspect ratio
+            candidates.append((ccx, ccy, "Contour_Binary"))
+        candidates.append((pcx, pcy, "Projection_Binary"))
+        
+        # Contour on Grayscale (thresh_cropped)
+        contours_g, _ = cv2.findContours(thresh_cropped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_contour_g = None
+        min_dist_to_center_g = float('inf')
+        center_local_x = (x_max - x_min) / 2.0
+        center_local_y = (y_max - y_min) / 2.0
+        
+        for cnt in contours_g:
+            area = cv2.contourArea(cnt)
+            if area < 20:
+                continue
+            M = cv2.moments(cnt)
+            if M["m00"] != 0:
+                bcx = M["m10"] / M["m00"]
+                bcy = M["m01"] / M["m00"]
+            else:
+                bx, by, bw, bh = cv2.boundingRect(cnt)
+                bcx = bx + bw / 2.0
+                bcy = by + bh / 2.0
+            dist = (bcx - center_local_x)**2 + (bcy - center_local_y)**2
+            if dist < min_dist_to_center_g:
+                min_dist_to_center_g = dist
+                best_contour_g = cnt
+                
+        if best_contour_g is not None:
+            M = cv2.moments(best_contour_g)
+            if M["m00"] != 0:
+                cx_l = M["m10"] / M["m00"]
+                cy_l = M["m01"] / M["m00"]
+            else:
+                bx, by, bw, bh = cv2.boundingRect(best_contour_g)
+                cx_l, cy_l = bx + bw / 2.0, by + bh / 2.0
+            ccx_g = x_min + int(round(cx_l))
+            ccy_g = y_min + int(round(cy_l))
+            candidates.append((ccx_g, ccy_g, "Contour_Gray"))
+            
+        # Projection on Grayscale (local_region)
+        proj_y_g = np.sum(local_region, axis=1)
+        proj_x_g = np.sum(local_region, axis=0)
+        cy_l_p_g = get_peak_center(proj_y_g, cy - y_min)
+        cx_l_p_g = get_peak_center(proj_x_g, cx - x_min)
+        pcx_g = x_min + int(round(cx_l_p_g))
+        pcy_g = y_min + int(round(cy_l_p_g))
+        candidates.append((pcx_g, pcy_g, "Projection_Gray"))
+        
+        # Fit minimum area rectangle to locate corner center and aspect ratio from best morphological contour (common reference)
+        if best_contour is not None:
             rect = cv2.minAreaRect(best_contour)
             corner_cx = x_min + rect[0][0]
             corner_cy = y_min + rect[0][1]
             w, h = rect[1]
             aspect_ratio = max(w, h) / (min(w, h) + 1e-5)
-
-            dist_c_grid = np.sqrt((ccx - cx)**2 + (ccy - cy)**2)
-            dist_c_corner = np.sqrt((ccx - corner_cx)**2 + (ccy - corner_cy)**2)
-            conf_c = _compute_alignment_confidence(
-                _get_local_mean_intensity(gray_tophat, ccx, ccy, 20),
-                dist_c_grid,
-                dist_c_corner,
-                aspect_ratio
-            )
-            
-            dist_p_grid = np.sqrt((pcx - cx)**2 + (pcy - cy)**2)
-            dist_p_corner = np.sqrt((pcx - corner_cx)**2 + (pcy - corner_cy)**2)
-            conf_p = _compute_alignment_confidence(
-                _get_local_mean_intensity(gray_tophat, pcx, pcy, 20),
-                dist_p_grid,
-                dist_p_corner,
-                aspect_ratio
-            )
-            
-            if conf_c >= conf_p:
-                return ccx, ccy
-            else:
-                return pcx, pcy
         else:
-            return pcx, pcy
+            corner_cx, corner_cy, aspect_ratio = None, None, 1.0
             
+        best_cand = (pcx, pcy)
+        best_score = -float('inf')
+        
+        for cand_x, cand_y, name in candidates:
+            dist_to_grid = np.sqrt((cand_x - cx)**2 + (cand_y - cy)**2)
+            
+            if corner_cx is not None:
+                dist_to_corner = np.sqrt((cand_x - corner_cx)**2 + (cand_y - corner_cy)**2)
+            else:
+                dist_to_corner = 0.0
+                
+            conf = _compute_alignment_confidence(
+                _get_local_mean_intensity(gray_tophat, cand_x, cand_y, 20),
+                dist_to_grid,
+                dist_to_corner,
+                aspect_ratio if corner_cx is not None else 1.0
+            )
+            
+            if conf > best_score:
+                best_score = conf
+                best_cand = (cand_x, cand_y)
+                
+        return best_cand[0], best_cand[1]
+        
     return pcx, pcy
 
 def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
