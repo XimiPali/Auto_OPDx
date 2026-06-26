@@ -83,16 +83,17 @@ class ProfilometryApp(QWidget):
         self.box_size_input = QSpinBox()
         self.box_size_input.setRange(5, 200)
         self.box_size_input.setValue(50)
-        self.box_size_input.valueChanged.connect(self.on_box_size_changed)
+        self.box_size_btn = QPushButton("Apply")
+        self.box_size_btn.clicked.connect(self.reload_previews)
         self.box_size_layout.addWidget(self.box_size_label)
         self.box_size_layout.addWidget(self.box_size_input)
+        self.box_size_layout.addWidget(self.box_size_btn)
         layout.addLayout(self.box_size_layout)
         
         # Circular Mask Control (only visible in Fluorescence Mode)
         self.mask_layout = QHBoxLayout()
         self.circle_mask_checkbox = QCheckBox("Use Circular Mask")
         self.circle_mask_checkbox.setChecked(False)
-        self.circle_mask_checkbox.stateChanged.connect(self.on_mask_changed)
         self.mask_layout.addWidget(self.circle_mask_checkbox)
         layout.addLayout(self.mask_layout)
         
@@ -101,7 +102,6 @@ class ProfilometryApp(QWidget):
         self.ordering_label = QLabel("Spot Ordering:")
         self.ordering_dropdown = QComboBox()
         self.ordering_dropdown.addItems(["reversed", "standard", "p8"])
-        self.ordering_dropdown.currentIndexChanged.connect(self.on_ordering_changed)
         self.ordering_layout.addWidget(self.ordering_label)
         self.ordering_layout.addWidget(self.ordering_dropdown)
         layout.addLayout(self.ordering_layout)
@@ -109,6 +109,7 @@ class ProfilometryApp(QWidget):
         # Hide box size and advanced controls by default (Profilometry Mode)
         self.box_size_label.hide()
         self.box_size_input.hide()
+        self.box_size_btn.hide()
         self.circle_mask_checkbox.hide()
         self.ordering_label.hide()
         self.ordering_dropdown.hide()
@@ -184,6 +185,7 @@ class ProfilometryApp(QWidget):
             self.file_label.setText("OPDx Files:")
             self.box_size_label.hide()
             self.box_size_input.hide()
+            self.box_size_btn.hide()
             self.circle_mask_checkbox.hide()
             self.ordering_label.hide()
             self.ordering_dropdown.hide()
@@ -195,6 +197,7 @@ class ProfilometryApp(QWidget):
             self.file_label.setText("Fluorescence Images:")
             self.box_size_label.show()
             self.box_size_input.show()
+            self.box_size_btn.show()
             self.circle_mask_checkbox.show()
             self.ordering_label.show()
             self.ordering_dropdown.show()
@@ -207,18 +210,6 @@ class ProfilometryApp(QWidget):
         if files_text:
             files = [f.strip() for f in files_text.split(";") if f.strip()]
             self.update_visualizations(files)
-
-    def on_box_size_changed(self):
-        """Called when bounding box size is modified."""
-        self.reload_previews()
-
-    def on_mask_changed(self, state):
-        """Called when circular mask option is toggled."""
-        self.reload_previews()
-
-    def on_ordering_changed(self, index):
-        """Called when ordering convention is changed."""
-        self.reload_previews()
 
 
     def browse_files(self):
