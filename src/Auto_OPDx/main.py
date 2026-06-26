@@ -97,22 +97,11 @@ class ProfilometryApp(QWidget):
         self.mask_layout.addWidget(self.circle_mask_checkbox)
         layout.addLayout(self.mask_layout)
         
-        # Spot Ordering Control (only visible in Fluorescence Mode)
-        self.ordering_layout = QHBoxLayout()
-        self.ordering_label = QLabel("Spot Ordering:")
-        self.ordering_dropdown = QComboBox()
-        self.ordering_dropdown.addItems(["reversed", "standard", "p8"])
-        self.ordering_layout.addWidget(self.ordering_label)
-        self.ordering_layout.addWidget(self.ordering_dropdown)
-        layout.addLayout(self.ordering_layout)
-        
         # Hide box size and advanced controls by default (Profilometry Mode)
         self.box_size_label.hide()
         self.box_size_input.hide()
         self.box_size_btn.hide()
         self.circle_mask_checkbox.hide()
-        self.ordering_label.hide()
-        self.ordering_dropdown.hide()
         
         # 3. Output CSV Selection
         csv_layout = QHBoxLayout()
@@ -187,8 +176,6 @@ class ProfilometryApp(QWidget):
             self.box_size_input.hide()
             self.box_size_btn.hide()
             self.circle_mask_checkbox.hide()
-            self.ordering_label.hide()
-            self.ordering_dropdown.hide()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("sample_heights.csv")
             self.log("Switched to Profilometry Mode (OPDx).")
@@ -199,8 +186,6 @@ class ProfilometryApp(QWidget):
             self.box_size_input.show()
             self.box_size_btn.show()
             self.circle_mask_checkbox.show()
-            self.ordering_label.show()
-            self.ordering_dropdown.show()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("compiled_fluorescence_results.csv")
             self.log("Switched to Fluorescence Mode (JPG/PNG).")
@@ -264,7 +249,7 @@ class ProfilometryApp(QWidget):
                     cols = self.cols_input.value()
                     box_size = self.box_size_input.value()
                     use_circle_mask = self.circle_mask_checkbox.isChecked()
-                    ordering = self.ordering_dropdown.currentText()
+                    ordering = 'standard'
                     refinement_method = 'best'
                     
                     res = process_fluorescence_image(filepath, rows=rows, cols=cols, box_size=box_size,
@@ -471,7 +456,7 @@ class ProfilometryApp(QWidget):
             self.log("Starting Fluorescence Brightness Extraction...")
             box_size = self.box_size_input.value()
             use_circle_mask = self.circle_mask_checkbox.isChecked()
-            ordering = self.ordering_dropdown.currentText()
+            ordering = 'standard'
             refinement_method = 'best'
             processed_data = {}
 

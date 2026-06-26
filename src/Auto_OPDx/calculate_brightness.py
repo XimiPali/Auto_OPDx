@@ -497,7 +497,7 @@ def correct_centers_with_affine_ransac(feature_centers, threshold=5.0):
         
     return corrected_centers
 
-def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='reversed', refinement_method='contour'):
+def process_fluorescence_image(img_path, rows=8, cols=8, box_size=50, use_circle_mask=False, ordering='standard', refinement_method='contour'):
     """
     Runs the complete fluorescence grid finding, centroid refinement, and spot stats extraction.
     """
