@@ -12,7 +12,7 @@ import matplotlib.patches as patches
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QLineEdit, QPushButton, QFileDialog, 
-                             QSpinBox, QTextEdit, QMessageBox, QListWidget, QListWidgetItem,
+                             QSpinBox, QDoubleSpinBox, QTextEdit, QMessageBox, QListWidget, QListWidgetItem,
                              QSizePolicy, QComboBox)
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QImage, QPixmap, QIcon
@@ -24,6 +24,7 @@ from Auto_OPDx.filter import filter_components
 from Auto_OPDx.reorder import reorder_components
 from Auto_OPDx.calculate_heights import calculate_heights
 from Auto_OPDx.calculate_brightness import process_fluorescence_image, compile_fluorescence_results
+from Auto_OPDx.adaptive_thresholds import compute_adaptive_thresholds
 
 class ProfilometryApp(QWidget):
     def __init__(self):
@@ -91,6 +92,38 @@ class ProfilometryApp(QWidget):
         # Hide box size controls by default (Profilometry Mode)
         self.box_size_label.hide()
         self.box_size_input.hide()
+
+        # Adaptive Threshold Controls (only visible in Profilometry Mode)
+        self.threshold_layout = QHBoxLayout()
+        
+        self.pct_label = QLabel("Background %:")
+        self.pct_input = QDoubleSpinBox()
+        self.pct_input.setRange(1.0, 99.0)
+        self.pct_input.setSingleStep(0.5)
+        self.pct_input.setValue(45.0)
+        self.pct_input.valueChanged.connect(self.on_threshold_changed)
+        
+        self.dist_label = QLabel("Distance (µm):")
+        self.dist_input = QDoubleSpinBox()
+        self.dist_input.setRange(0.1, 50.0)
+        self.dist_input.setSingleStep(0.1)
+        self.dist_input.setValue(2.0)
+        self.dist_input.valueChanged.connect(self.on_threshold_changed)
+        
+        self.area_label = QLabel("Min Area (px):")
+        self.area_input = QSpinBox()
+        self.area_input.setRange(1, 1000)
+        self.area_input.setSingleStep(1)
+        self.area_input.setValue(15)
+        self.area_input.valueChanged.connect(self.on_threshold_changed)
+        
+        self.threshold_layout.addWidget(self.pct_label)
+        self.threshold_layout.addWidget(self.pct_input)
+        self.threshold_layout.addWidget(self.dist_label)
+        self.threshold_layout.addWidget(self.dist_input)
+        self.threshold_layout.addWidget(self.area_label)
+        self.threshold_layout.addWidget(self.area_input)
+        layout.addLayout(self.threshold_layout)
         
         # 3. Output CSV Selection
         csv_layout = QHBoxLayout()
@@ -142,6 +175,7 @@ class ProfilometryApp(QWidget):
         # Cache dictionaries
         self.cached_scans = {}
         self.cached_fluorescence = {}
+        self.sample_thresholds = {}
 
     def log(self, message):
         """Helper to print messages to the GUI text box."""
@@ -157,12 +191,19 @@ class ProfilometryApp(QWidget):
         self.canvas.draw()
         self.cached_scans.clear()
         self.cached_fluorescence.clear()
+        self.sample_thresholds.clear()
         
         if index == 0:
             # Profilometry Mode
             self.file_label.setText("OPDx Files:")
             self.box_size_label.hide()
             self.box_size_input.hide()
+            self.pct_label.show()
+            self.pct_input.show()
+            self.dist_label.show()
+            self.dist_input.show()
+            self.area_label.show()
+            self.area_input.show()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("sample_heights.csv")
             self.log("Switched to Profilometry Mode (OPDx).")
@@ -171,6 +212,12 @@ class ProfilometryApp(QWidget):
             self.file_label.setText("Fluorescence Images:")
             self.box_size_label.show()
             self.box_size_input.show()
+            self.pct_label.hide()
+            self.pct_input.hide()
+            self.dist_label.hide()
+            self.dist_input.hide()
+            self.area_label.hide()
+            self.area_input.hide()
             self.csv_label.setText("Output CSV:")
             self.csv_input.setText("compiled_fluorescence_results.csv")
             self.log("Switched to Fluorescence Mode (JPG/PNG).")
@@ -179,6 +226,18 @@ class ProfilometryApp(QWidget):
         """Called when bounding box size is modified."""
         # Instantly redraw the visualization with the new green bounding boxes
         self.display_selected_visualization()
+
+    def on_threshold_changed(self):
+        """Called when any profilometry threshold control is modified."""
+        if self.mode_dropdown.currentIndex() == 0:
+            item = self.preview_list.currentItem()
+            if item:
+                filepath = item.data(Qt.UserRole)
+                if filepath in self.sample_thresholds:
+                    self.sample_thresholds[filepath]['background_percentile'] = self.pct_input.value()
+                    self.sample_thresholds[filepath]['feature_distance_um'] = self.dist_input.value()
+                    self.sample_thresholds[filepath]['min_area_px'] = self.area_input.value()
+            self.display_selected_visualization()
 
     def browse_files(self):
         is_fluorescence = self.mode_dropdown.currentIndex() == 1
@@ -204,6 +263,7 @@ class ProfilometryApp(QWidget):
         self.canvas.draw()
         self.cached_scans.clear()
         self.cached_fluorescence.clear()
+        self.sample_thresholds.clear()
         QApplication.processEvents()
         
         is_fluorescence = self.mode_dropdown.currentIndex() == 1
@@ -214,6 +274,31 @@ class ProfilometryApp(QWidget):
                     loader = DektakLoad(filepath)
                     x, y, z = loader.get_data_2D()
                     self.cached_scans[filepath] = (x, y, z)
+                    
+                    # Compute and store suggestions for this file
+                    try:
+                        x_mesh, y_mesh = np.meshgrid(x, y)
+                        rows = self.rows_input.value()
+                        cols = self.cols_input.value()
+                        suggestions = compute_adaptive_thresholds(z, x_mesh, y_mesh, rows=rows, cols=cols)
+                        self.sample_thresholds[filepath] = suggestions
+                        
+                        self.log(f"Computed adaptive thresholds for {os.path.basename(filepath)}:")
+                        self.log(f"  - Suggested Background Percentile: {suggestions['background_percentile']:.1f}%")
+                        self.log(f"  - Suggested Feature Distance: {suggestions['feature_distance_um']:.2f} µm")
+                        self.log(f"  - Suggested Min Area: {suggestions['min_area_px']} px")
+                        
+                        if idx == 0:
+                            self.pct_input.setValue(suggestions["background_percentile"])
+                            self.dist_input.setValue(suggestions["feature_distance_um"])
+                            self.area_input.setValue(suggestions["min_area_px"])
+                    except Exception as ex:
+                        self.log(f"Warning: Failed to compute adaptive thresholds for {os.path.basename(filepath)}: {ex}")
+                        self.sample_thresholds[filepath] = {
+                            "background_percentile": 45.0,
+                            "feature_distance_um": 2.0,
+                            "min_area_px": 15
+                        }
                     
                     import matplotlib.cm as cm
                     # Normalize and colorize for thumbnail using matplotlib viridis colormap
@@ -276,12 +361,88 @@ class ProfilometryApp(QWidget):
         if not is_fluorescence:
             if filepath in self.cached_scans:
                 x, y, z = self.cached_scans[filepath]
-                ax = self.figure.add_subplot(111)
-                im = ax.imshow(z, cmap='viridis', origin='lower', extent=[x.min(), x.max(), y.min(), y.max()], aspect='equal')
-                self.figure.colorbar(im, ax=ax, label='Height')
-                ax.set_title(os.path.basename(filepath))
-                ax.set_xlabel('X (μm)')
-                ax.set_ylabel('Y (μm)')
+                x_mesh, y_mesh = np.meshgrid(x, y)
+                extent = [x.min(), x.max(), y.min(), y.max()]
+                
+                # Fetch and populate spinboxes for this specific sample
+                thresholds = self.sample_thresholds.get(filepath, {
+                    "background_percentile": 45.0,
+                    "feature_distance_um": 2.0,
+                    "min_area_px": 15
+                })
+                
+                # Temporarily block signals to avoid triggering recursive on_threshold_changed loops
+                self.pct_input.blockSignals(True)
+                self.dist_input.blockSignals(True)
+                self.area_input.blockSignals(True)
+                
+                self.pct_input.setValue(thresholds["background_percentile"])
+                self.dist_input.setValue(thresholds["feature_distance_um"])
+                self.area_input.setValue(thresholds["min_area_px"])
+                
+                self.pct_input.blockSignals(False)
+                self.dist_input.blockSignals(False)
+                self.area_input.blockSignals(False)
+                
+                bg_pct = thresholds["background_percentile"]
+                feat_dist = thresholds["feature_distance_um"]
+                min_area = thresholds["min_area_px"]
+                
+                try:
+                    # Run the pipeline preview
+                    global_plane, intercept, coeff = generate_global_plane(
+                        z, x_mesh, y_mesh, group_size=10, background_percentile=bg_pct
+                    )
+                    background_mask = refine_background_mask(
+                        z, x_mesh, y_mesh, intercept, coeff, feature_distance_um=feat_dist
+                    )
+                    
+                    # Connected components on feature mask
+                    output_mask_cv = (~background_mask).astype(np.uint8) * 255
+                    
+                    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+                        output_mask_cv, 4, cv2.CV_32S
+                    )
+                    new_num_labels, filtered_labels, filtered_stats, filtered_centroids = filter_components(
+                        num_labels, labels, stats, centroids, min_area_threshold=min_area,
+                        rows=self.rows_input.value(), cols=self.cols_input.value()
+                    )
+                    
+                    # --- Left panel: Height map with background mask overlay ---
+                    ax1 = self.figure.add_subplot(121)
+                    ax1.imshow(z, cmap='viridis', origin='lower', extent=extent, aspect='equal')
+                    # Overlay the feature (non-background) mask in semi-transparent red
+                    feature_overlay = np.zeros((*z.shape, 4))  # RGBA
+                    feature_overlay[~background_mask] = [1, 0, 0, 0.35]  # red with alpha
+                    ax1.imshow(feature_overlay, origin='lower', extent=extent, aspect='equal')
+                    ax1.set_title(f'Background Mask\n(%={bg_pct:.1f}, dist={feat_dist:.1f}µm)', fontsize=9)
+                    ax1.set_xlabel('X (μm)', fontsize=8)
+                    ax1.set_ylabel('Y (μm)', fontsize=8)
+                    ax1.tick_params(labelsize=7)
+                    
+                    # --- Right panel: Detected features after filtering ---
+                    ax2 = self.figure.add_subplot(122)
+                    ax2.imshow(z, cmap='viridis', origin='lower', extent=extent, aspect='equal')
+                    # Color each filtered component uniquely
+                    if new_num_labels > 1:
+                        component_overlay = np.zeros((*z.shape, 4))  # RGBA
+                        import matplotlib.cm as cm
+                        colors = cm.tab20(np.linspace(0, 1, new_num_labels))
+                        for lbl in range(1, new_num_labels):
+                            mask = filtered_labels == lbl
+                            color = colors[lbl % len(colors)]
+                            component_overlay[mask] = [color[0], color[1], color[2], 0.5]
+                        ax2.imshow(component_overlay, origin='lower', extent=extent, aspect='equal')
+                    ax2.set_title(f'Features: {new_num_labels - 1} detected\n(min area={min_area}px)', fontsize=9)
+                    ax2.set_xlabel('X (μm)', fontsize=8)
+                    ax2.set_ylabel('Y (μm)', fontsize=8)
+                    ax2.tick_params(labelsize=7)
+                    
+                except Exception as e:
+                    ax = self.figure.add_subplot(111)
+                    ax.imshow(z, cmap='viridis', origin='lower', extent=extent, aspect='equal')
+                    ax.set_title(f'{os.path.basename(filepath)}\nPreview error: {e}', fontsize=9)
+                
                 self.figure.tight_layout()
                 self.canvas.draw()
         else:
@@ -360,19 +521,33 @@ class ProfilometryApp(QWidget):
                     num_samples = rows * cols
                     x_mesh, y_mesh = np.meshgrid(x, y)
 
-                    global_plane, intercept, coeff  = generate_global_plane(z, x_mesh, y_mesh, group_size=10)
-                    background_mask = refine_background_mask(z, x_mesh, y_mesh, intercept, coeff)
+                    thresholds = self.sample_thresholds.get(opdx_file, {
+                        "background_percentile": 45.0,
+                        "feature_distance_um": 2.0,
+                        "min_area_px": 15
+                    })
+                    bg_pct = thresholds["background_percentile"]
+                    feat_dist = thresholds["feature_distance_um"]
+                    min_area = thresholds["min_area_px"]
+
+                    self.log(f"Using thresholds - Background%: {bg_pct:.1f}, Distance: {feat_dist:.2f} µm, Min Area: {min_area} px")
+
+                    global_plane, intercept, coeff  = generate_global_plane(z, x_mesh, y_mesh, group_size=10, background_percentile=bg_pct)
+                    background_mask = refine_background_mask(z, x_mesh, y_mesh, intercept, coeff, feature_distance_um=feat_dist)
 
                     connectivity = 4
                     output_mask_cv = (~background_mask).astype(np.uint8) * 255
 
                     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(output_mask_cv, connectivity, cv2.CV_32S)
-                    self.log(f"OpenCV found {num_labels} raw components.")
+                    self.log(f"OpenCV found {num_labels} raw components after morphological cleanup.")
 
-                    new_num_labels, filtered_labels, filtered_stats, filtered_centroids = filter_components(num_labels, labels, stats, centroids)
+                    new_num_labels, filtered_labels, filtered_stats, filtered_centroids = filter_components(
+                        num_labels, labels, stats, centroids, min_area_threshold=min_area,
+                        rows=rows, cols=cols
+                    )
                     self.log(f"After filtering, {new_num_labels} components remain.")
 
-                    final_labels, final_stats, final_centroids = reorder_components(num_labels, stats, centroids, rows, cols)
+                    final_labels, final_stats, final_centroids = reorder_components(filtered_stats, filtered_centroids, rows, cols)
                     self.log(f"Final count for height calculation: {len(final_stats)}")
 
                     height_results = calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples)

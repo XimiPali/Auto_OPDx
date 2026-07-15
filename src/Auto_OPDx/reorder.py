@@ -2,17 +2,19 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 import cv2
 
-def reorder_components(num_labels, stats, centroids, rows, cols):
-    min_area = 15
-    valid_comp_indices = [i for i in range(1, num_labels) if stats[i, cv2.CC_STAT_AREA] >= min_area]
-    comp_centroids_raw = centroids[valid_comp_indices]
-    comp_stats_raw = stats[valid_comp_indices]
+def reorder_components(filtered_stats, filtered_centroids, rows, cols):
+    comp_centroids_raw = filtered_centroids[1:]
+    comp_stats_raw = filtered_stats[1:]
 
     print(f"Total components detected for mapping: {len(comp_centroids_raw)}")
 
-    # 2. Define grid centers based on the bounds of these detections
-    unique_x = np.linspace(comp_centroids_raw[:, 0].min(), comp_centroids_raw[:, 0].max(), cols)
-    unique_y = np.linspace(comp_centroids_raw[:, 1].min(), comp_centroids_raw[:, 1].max(), rows)
+    if len(comp_centroids_raw) == 0:
+        # Prevent crash if no components detected
+        unique_x = np.linspace(0, 100, cols)
+        unique_y = np.linspace(0, 100, rows)
+    else:
+        unique_x = np.linspace(comp_centroids_raw[:, 0].min(), comp_centroids_raw[:, 0].max(), cols)
+        unique_y = np.linspace(comp_centroids_raw[:, 1].min(), comp_centroids_raw[:, 1].max(), rows)
 
     # 3. Create theoretical slots in quadrant order (BL, TL, BR, TR)
     half_cols = cols // 2
@@ -46,8 +48,8 @@ def reorder_components(num_labels, stats, centroids, rows, cols):
     total_slots = rows * cols
     final_centroids = np.zeros((total_slots + 1, 2))
     final_stats = np.zeros((total_slots + 1, 5), dtype=int)
-    final_centroids[0] = centroids[0]
-    final_stats[0] = stats[0]
+    final_centroids[0] = filtered_centroids[0]
+    final_stats[0] = filtered_stats[0]
 
 
     for slot_id in range(1, rows * cols + 1):

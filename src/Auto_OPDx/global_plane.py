@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def generate_global_plane(z, x_mesh, y_mesh, group_size):
+def generate_global_plane(z, x_mesh, y_mesh, group_size=10, background_percentile=45):
 
     # Group by 10 lines
     num_rows = z.shape[0]
@@ -23,7 +23,7 @@ def generate_global_plane(z, x_mesh, y_mesh, group_size):
         combined_heights = current_group_data.flatten()
 
         # Calculate threshold
-        percentile_value = np.percentile(combined_heights, 45)
+        percentile_value = np.percentile(combined_heights, background_percentile)
         group_background_thresholds.append(percentile_value)
 
     group_background_masks_rows = []
