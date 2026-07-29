@@ -25,6 +25,7 @@ from Auto_OPDx.reorder import reorder_components
 from Auto_OPDx.calculate_heights import calculate_heights
 from Auto_OPDx.calculate_brightness import process_fluorescence_image, compile_fluorescence_results
 from Auto_OPDx.adaptive_thresholds import compute_adaptive_thresholds
+from Auto_OPDx.grid_spacing import estimate_grid_spacing
 
 class ProfilometryApp(QWidget):
     def __init__(self):
@@ -585,7 +586,11 @@ class ProfilometryApp(QWidget):
                     final_labels, final_stats, final_centroids = reorder_components(filtered_stats, filtered_centroids, rows, cols)
                     self.log(f"Final count for height calculation: {len(final_stats)}")
 
-                    height_results = calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples)
+                    grid_spacing = estimate_grid_spacing(final_centroids, final_stats, rows, cols)
+                    self.log(f"Auto bounding box: {grid_spacing['box_w_px']}×{grid_spacing['box_h_px']} px "
+                             f"(grid spacing: X={grid_spacing['spacing_x']:.1f}, Y={grid_spacing['spacing_y']:.1f} px)")
+
+                    height_results = calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples, grid_spacing=grid_spacing)
 
                     filename = os.path.basename(opdx_file)
                     all_results.append((filename, height_results))

@@ -1,9 +1,13 @@
 import numpy as np
 
-def calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples):
-    # Setup bounding box
-    box_w_px = 15
-    box_h_px = 80
+def calculate_heights(z, x_mesh, y_mesh, final_stats, final_centroids, background_mask, intercept, coeff, num_samples, grid_spacing=None):
+    # Setup bounding box — use grid-derived dimensions if available
+    if grid_spacing is not None:
+        box_w_px = grid_spacing['box_w_px']
+        box_h_px = grid_spacing['box_h_px']
+    else:
+        box_w_px = 15
+        box_h_px = 80
 
     # Prepare list for results
     height_results = []

@@ -208,5 +208,8 @@ __marimo__/
 
 *.OPDx
 *.csv
+*.xlsx
+Printing/
+run_complete_analysis.py
 POST WASH - OCTOBER 2024 SCR-FL
 .DS_Store
