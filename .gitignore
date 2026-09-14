@@ -212,4 +212,22 @@ __marimo__/
 Printing/
 run_complete_analysis.py
 POST WASH - OCTOBER 2024 SCR-FL
+
+# Lab data — never commit. gitignore is case-sensitive, so .opdx needs its own entry.
+*.opdx
+*.npy
+*.npz
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+data/
+tmp_rovo_venv/
 .DS_Store
+# Study deliverables: the repo ignores *.csv and *.png wholesale, but the small
+# result tables and figures under studies/ ARE the findings and should be
+# tracked. The 5 MB intermediate feature table stays ignored.
+!studies/*/results/*.csv
+!studies/*/figures/*.png
+studies/02-thickness-signal-audit/results/cells_audit.csv
