@@ -36,6 +36,52 @@ fork does.
 3. deploy           photo replaces the needle                                 (the goal)
 ```
 
+## The tool
+
+One command. Point it at a folder of photos and a folder of scans; get aligned
+per-cell data out.
+
+```bash
+align-plates --images data/rgb/img --labels data/opdx --out aligned/
+```
+
+```
+found 69 photo/scan pairs
+aligned 69/69 plates · 4416 cells · 252s
+  registration error   median   8.15 µm (3.1% of a cell)
+  cells per plate      median     64 of 64
+  substrate tilt removed median  20.99 µm (71% of the raw height range)
+```
+
+It pairs files by name, finds all 64 pads in each image, fits the grid, registers
+the two, and writes:
+
+```
+aligned/
+  plates/<plate>.npz   photo crop + height crop + true height for every cell,
+                       plus that plate's registration error and scale
+  qc/<plate>.png       8×8 montage, each cell labelled with its height —
+                       open these to check a run without writing any code
+  summary.csv          one row per plate
+  cells.csv            one row per cell
+  manifest.json        the exact settings the run used
+```
+
+Useful flags: `--dry-run` (show the pairing, process nothing), `--skip-existing`
+(resume a partial run), `--pattern '{stem}_photo'` (when the two folders name
+files differently), `--limit N`, `--no-qc`. Full list with `align-plates --help`.
+
+Loading one plate:
+
+```python
+import numpy as np
+d = np.load("aligned/plates/10-01-2025_P1.npz")
+d["photo_crops"]   # (64, 96, 96, 3) uint8
+d["height_crops"]  # (64, 32, 32)    float32, µm above the substrate
+d["height_um"]     # (64,)           the label
+d["row_col"]       # (64, 2)         grid position
+```
+
 ## What we found — the short version
 
 **The previous labels were mostly measuring where a cell sat on the chip, not
@@ -83,9 +129,12 @@ Auto_OPDx/
 │   ├── plate.py                      load .OPDx → µm · fit substrate plane · detrend · resample
 │   ├── lattice.py                    detect the 64 features · fit ONE 8×8 grid model to all of them
 │   ├── rgb.py                        find the same 64 features in the photo
-│   └── dataset.py                    register photo ↔ scan · cut per-cell crops · compute labels
+│   ├── dataset.py                    register photo ↔ scan · cut per-cell crops · compute labels
+│   └── cli.py                        THE TOOL — `align-plates`, folder in → aligned arrays out
 │
-├── tests/test_lattice.py           19 tests of the grid solver against synthetic grids with known truth
+├── tests/                          39 tests
+│   ├── test_lattice.py               the grid solver, against synthetic grids with known truth
+│   └── test_cli.py                   pairing, arguments, and every failure path of the tool
 │
 ├── scripts/                        THE PIPELINE — numbered, run in order   → scripts/README.md
 │   ├── 01_diagnose_plate.py          one plate: geometry, tilt, feature count, figure
@@ -169,6 +218,8 @@ matplotlib backend. Also, NumPy 2 on Apple Accelerate raises spurious
 
 ## Status
 
+- ✅ **`align-plates` tool shipped** — one command, 69/69 plates, 4,416 cells,
+  no manual steps, QC image per plate
 - ✅ Labels rebuilt for all 69 plates; pipeline validated (reproduces the
   previous model's result on the *old* labels, so the comparison is sound)
 - ✅ Negative result stress-tested and confirmed (study 02)

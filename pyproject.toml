@@ -155,3 +155,4 @@ allow-direct-references = true
 
 [project.scripts]
 auto-opdx = "Auto_OPDx.main:main"
+align-plates = "Auto_OPDx.alignment.cli:main"

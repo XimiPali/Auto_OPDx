@@ -343,6 +343,7 @@ def build_cells(
     label_um: float | None = None,
     height_px: int = 32,
     rgb_px: int = 96,
+    photo_square_px: int | None = None,
 ) -> list[Cell]:
     """Extract all ``rows*cols`` cells for one plate.
 
@@ -360,6 +361,20 @@ def build_cells(
         not: a feature covers only ~12% of a full-pitch window, so percentile
         labels over the whole cell are mostly background. Set this near the
         feature size (~110 um) if you intend to use those.
+    photo_square_px
+        If given, cut the photo crop as a square of this many **pixels** rather
+        than a square of ``cell_um`` micrometres.
+
+        Which is right depends on an unresolved calibration question. Measured
+        over all 69 plates: the pads are square in raw photo pixels (53.5 x 54.0,
+        ratio 1.000) and the geometric-mean scale is 1.2501 um/px, matching the
+        4x / 0.5x optics exactly -- so the camera's pixels really are square.
+        But the photo and the scan disagree about the *grid's* aspect ratio
+        (1.290 vs 0.979, a factor of 1.319 ~ 4:3), meaning one instrument's axis
+        calibration is off. Cropping square in micrometres trusts the scan and
+        stretches the photo; cropping square in pixels trusts the photo and
+        leaves the pads undistorted. The latter is the safer default until the
+        lab resolves which axis is wrong, so the CLI uses it.
     """
     if cell_um is None:
         cell_um = float(np.mean(hm.fit.pitch))
@@ -392,15 +407,25 @@ def build_cells(
                 px = px_of_um((hx, hy))
                 sx, sy = cross.um_per_px
                 img = np.asarray(photo.img, float)
-                # Scale pixel indices into micrometres so the crop is square in
-                # physical space; the photo's pixel scale differs ~1.36x by axis.
-                ix = np.arange(img.shape[1], dtype=float) * sx
-                iy = np.arange(img.shape[0], dtype=float) * sy
+                if photo_square_px is not None:
+                    # Pixel-square crop: index the photo in its own pixel units,
+                    # so a square window stays square on the sensor and the pads
+                    # are not stretched. See the docstring on the calibration
+                    # question this sidesteps.
+                    ix = np.arange(img.shape[1], dtype=float)
+                    iy = np.arange(img.shape[0], dtype=float)
+                    cx_s, cy_s = float(px[0]), float(px[1])
+                    win = float(photo_square_px)
+                else:
+                    # Micrometre-square crop: scale pixel indices into um first.
+                    ix = np.arange(img.shape[1], dtype=float) * sx
+                    iy = np.arange(img.shape[0], dtype=float) * sy
+                    cx_s, cy_s = px[0] * sx, px[1] * sy
+                    win = cell_um
                 chans = []
                 for ch in range(img.shape[2]):
                     cc, ok, ov = _crop_um(
-                        img[:, :, ch], ix, iy,
-                        px[0] * sx, px[1] * sy, cell_um, rgb_px,
+                        img[:, :, ch], ix, iy, cx_s, cy_s, win, rgb_px,
                     )
                     rok = rok and ok
                     rover = max(rover, ov)

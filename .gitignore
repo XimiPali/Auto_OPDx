@@ -231,3 +231,7 @@ tmp_rovo_venv/
 !studies/*/results/*.csv
 !studies/*/figures/*.png
 studies/02-thickness-signal-audit/results/cells_audit.csv
+
+# align-plates output: generated, large (160 MB for 69 plates).
+# Regenerate with `align-plates --images ... --labels ... --out aligned/`
+aligned/

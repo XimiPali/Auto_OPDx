@@ -100,11 +100,34 @@ def _mute_reader_plot():
             _reader.plt = real
 
 
+# Real scans are ~260-280 kB. Anything far below that is empty or truncated,
+# and DektakLoad does not survive it (see load_plate).
+_MIN_PLAUSIBLE_BYTES = 1024
+
+
 def load_plate(path: str | Path) -> Plate:
-    """Read an ``.OPDx`` file and return a :class:`Plate` in micrometres."""
+    """Read an ``.OPDx`` file and return a :class:`Plate` in micrometres.
+
+    Raises
+    ------
+    ValueError
+        If the file is missing, empty or implausibly small. This check exists
+        because ``DektakLoad`` does not return at all on a truncated file -- it
+        loops looking for a terminator it will never find. An unattended batch
+        would stall indefinitely rather than reporting a bad input, so the
+        cheap guard goes here where every caller gets it.
+    """
     from OPDx_read.reader import DektakLoad
 
     path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"not a file: {path}")
+    size = path.stat().st_size
+    if size < _MIN_PLAUSIBLE_BYTES:
+        raise ValueError(
+            f"{path.name} is {size} bytes — empty or truncated. Real scans are "
+            f"~260 kB; the OPDx reader hangs on short files rather than failing."
+        )
     with _mute_reader_plot():
         x, y, z = DektakLoad(str(path)).get_data_2D()
     x = _to_um(x)
