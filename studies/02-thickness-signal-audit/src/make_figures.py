@@ -204,7 +204,11 @@ def main() -> None:
     M, t = cm.affine[:2], cm.affine[2]
     px = np.linalg.inv(M.T) @ (hm.fit.predict((4, 4))[0] - t)
     sx, sy = cm.um_per_px
-    hw, hh = (267 / 2) / sx, (267 / 2) / sy
+    # Square in sensor pixels, not micrometres: the camera's pixels are square
+    # (pads measure 53.5 x 54.0 px across all 69 plates), so a um-square window
+    # would stretch the pad by ~1.32. Sized off the tighter grid pitch.
+    half = min(ph.fit.pitch) * 0.95 / 2
+    hw = hh = half
     xa, xb = int(px[0] - hw), int(px[0] + hw)
     ya, yb = int(px[1] - hh), int(px[1] + hh)
     patch = ph.img[ya:yb, xa:xb]

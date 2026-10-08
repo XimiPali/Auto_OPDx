@@ -174,6 +174,18 @@ the camera a real depth cue:
 
 ## Caveats
 
+- **Window geometry.** These experiments cropped windows that were square in
+  *micrometres*, using a per-axis photo scale. Later measurement over all 69
+  plates showed the camera's pixels are square (pads 53.5 x 54.0 px, geometric
+  mean 1.2501 um/px matching the 4x/0.5x optics), so those windows were
+  stretched ~1.32x relative to a true square. The conclusions are unaffected:
+  the sweep found no signal at *any* window size from 267 um down to 60 um, and
+  the substrate-ring control and position-leakage results are correlations,
+  which a modest change in window aspect does not move. The crop geometry is
+  corrected in `align-plates`; if these numbers are ever quoted as precise
+  rather than directional, re-run `build_features.py` against the new crops.
+
+
 - ρ = 0.202 is a median over 69 held-out plates. It is well above the 0.10
   noise floor but it is not a large effect, and no confidence interval is
   computed here.
