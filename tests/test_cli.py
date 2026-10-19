@@ -239,3 +239,41 @@ def test_parser_requires_all_three_folders():
                  ["--images", "i", "--labels", "l"]):
         with pytest.raises(SystemExit):
             build_parser().parse_args(args)
+
+
+def test_skip_existing_with_everything_done_keeps_aggregates(tmp_path, capsys):
+    # regression: a rerun that skipped every plate used to overwrite
+    # manifest.json with plates_ok=0 while summary.csv/cells.csv stayed put
+    img, lab, out = tmp_path / "img", tmp_path / "lab", tmp_path / "out"
+    _touch(img, "A.jpg")
+    _touch(lab, "A.OPDx")
+    _touch(out / "plates", "A.npz")
+    manifest = out / "manifest.json"
+    manifest.write_text('{"plates_ok": 1}\n')
+
+    code = main(["--images", str(img), "--labels", str(lab),
+                 "--out", str(out), "--skip-existing"])
+
+    assert code == 0
+    assert "nothing left to process" in capsys.readouterr().out
+    assert manifest.read_text() == '{"plates_ok": 1}\n'
+    assert not (out / "summary.csv").exists()
+
+
+def test_partial_skip_does_not_rewrite_aggregates(tmp_path, capsys):
+    img, lab, out = tmp_path / "img", tmp_path / "lab", tmp_path / "out"
+    _touch(img, "A.jpg")
+    _touch(lab, "A.OPDx")
+    _touch(img, "B.jpg")
+    _touch(lab, "B.OPDx")
+    _touch(out / "plates", "A.npz")          # A already done, B is new
+    manifest = out / "manifest.json"
+    manifest.write_text('{"plates_ok": 1}\n')
+    # B's scan is an empty file, so it fails fast without a real plate
+    code = main(["--images", str(img), "--labels", str(lab),
+                 "--out", str(out), "--skip-existing", "--quiet"])
+
+    assert code == 1  # B fails on the empty scan
+    assert "were NOT rewritten" in capsys.readouterr().out
+    assert manifest.read_text() == '{"plates_ok": 1}\n'
+    assert not (out / "summary.csv").exists()

@@ -377,12 +377,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.limit:
         pairs = pairs[: args.limit]
+    skipped = 0
     if args.skip_existing:
         before = len(pairs)
         pairs = [p for p in pairs
                  if not (args.out / "plates" / f"{p[0]}.npz").exists()]
-        if before != len(pairs):
-            print(f"  skipping {before - len(pairs)} already written")
+        skipped = before - len(pairs)
+        if skipped:
+            print(f"  skipping {skipped} already written")
+    if not pairs:
+        print("nothing left to process — every plate is already in "
+              f"{args.out / 'plates'}")
+        return 0
 
     if args.dry_run:
         print("\ndry run — would process:")
@@ -407,6 +413,14 @@ def main(argv: list[str] | None = None) -> int:
                       f"{res.seconds:4.1f}s")
             else:
                 print(f"  [{i}/{len(pairs)}] {stem:24} FAILED  {res.error}")
+
+    if skipped:
+        # summary.csv, cells.csv and manifest.json describe the whole folder;
+        # writing them from a partial run would replace them with a subset
+        print(f"\nprocessed {len(results)} plate(s). summary.csv, cells.csv and "
+              "manifest.json were NOT rewritten because this run skipped "
+              f"{skipped}. Rerun without --skip-existing to regenerate them.")
+        return 0 if all(r.ok for r in results) else 1
 
     ok = [r for r in results if r.ok]
     _write_csv(args.out / "summary.csv", [vars(r) for r in results])
