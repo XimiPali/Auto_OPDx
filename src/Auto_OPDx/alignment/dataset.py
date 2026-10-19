@@ -344,11 +344,26 @@ def build_cells(
     height_px: int = 32,
     rgb_px: int = 96,
     photo_square_px: int | None = None,
+    centre: str = "detected",
 ) -> list[Cell]:
     """Extract all ``rows*cols`` cells for one plate.
 
     Parameters
     ----------
+    centre
+        Where each crop is centred. ``"detected"`` (default) uses the pad the
+        detector found in that slot -- in each modality independently -- and
+        falls back to the lattice prediction only for slots with no assigned
+        detection (a missing pad, or one pruned as an outlier). ``"lattice"``
+        uses the prediction for every cell, which the first release did.
+
+        The lattice is a rigid model of where the pads *should* be; the pads
+        are where they are. Study 03 scored the two by the overlap of the pad
+        masks in the photo crop and the height crop: lattice-centred crops sit
+        a median 7.4 um apart, detected-centred 2.5 um, and the mean IoU goes
+        from 0.63 to 0.71. The lattice still does the work that matters -- it
+        decides which detection belongs to which slot and rejects dust -- but
+        once that is settled the detection is the better centre.
     cell_um
         Physical size of the image crops. Defaults to the fitted lattice pitch
         so crops tile the plate. Keeping the full pitch preserves surrounding
@@ -376,10 +391,16 @@ def build_cells(
         leaves the pads undistorted. The latter is the safer default until the
         lab resolves which axis is wrong, so the CLI uses it.
     """
+    if centre not in ("detected", "lattice"):
+        raise ValueError(f"centre must be 'detected' or 'lattice', got {centre!r}")
     if cell_um is None:
         cell_um = float(np.mean(hm.fit.pitch))
     if label_um is None:
         label_um = cell_um
+
+    hm_obs = _slot_observations(hm.fit, cols) if centre == "detected" else {}
+    ph_obs = (_slot_observations(photo.fit, cols)
+              if centre == "detected" and photo is not None else {})
 
     # Pre-compute the pixel-space transform once rather than per cell.
     px_of_um = None
@@ -395,16 +416,30 @@ def build_cells(
     cells: list[Cell] = []
     for r in range(rows):
         for c in range(cols):
-            hx, hy = hm.fit.predict((r, c))[0]
+            slot = r * cols + c
+            if slot in hm_obs:
+                hx, hy = hm_obs[slot]
+                hm_src = "detected"
+            else:
+                hx, hy = hm.fit.predict((r, c))[0]
+                hm_src = "lattice"
 
             hcrop, hok, hover = _crop_um(
                 hm.resid, hm.plate.x, hm.plate.y, hx, hy, cell_um, height_px
             )
             labels = _native_labels(hm, hx, hy, label_um)
+            labels["hm_centre_detected"] = float(hm_src == "detected")
 
             rcrop, rok, rover = None, True, 0.0
             if px_of_um is not None:
-                px = px_of_um((hx, hy))
+                if slot in ph_obs:
+                    px = np.asarray(ph_obs[slot], float)
+                    labels["photo_centre_detected"] = 1.0
+                else:
+                    # no photo detection for this slot: place the photo crop
+                    # where the registration says this height-map centre lands
+                    px = px_of_um((hx, hy))
+                    labels["photo_centre_detected"] = 0.0
                 sx, sy = cross.um_per_px
                 img = np.asarray(photo.img, float)
                 if photo_square_px is not None:

@@ -155,13 +155,22 @@ def _photo_window(photo_fit, override: int | None) -> int:
     return max(16, int(round(pitch * _WINDOW_FRACTION)))
 
 
-def _save_plate(path: Path, stem: str, cells, hm, photo, cross, window_px: int) -> int:
+def _save_plate(path: Path, stem: str, cells, hm, photo, cross, window_px: int,
+                centre: str = "detected") -> int:
     """Write one plate's arrays. Returns the number of cells stored."""
     keep = [c for c in cells if c.rgb is not None and "h_max" in c.labels]
     if not keep:
         return 0
     np.savez_compressed(
         path,
+        # --- where each crop was centred -----------------------------------
+        # 1 = on the pad the detector found, 0 = on the lattice prediction
+        # (no detection was assigned to that slot). See build_cells(centre=).
+        hm_centre_detected=np.array(
+            [c.labels.get("hm_centre_detected", 0.0) for c in keep], np.int8),
+        photo_centre_detected=np.array(
+            [c.labels.get("photo_centre_detected", 0.0) for c in keep], np.int8),
+        centre=np.array(centre),
         # --- the data a model consumes -------------------------------------
         photo_crops=np.stack([c.rgb for c in keep]),
         height_crops=np.stack([
@@ -242,11 +251,13 @@ def process_plate(
                 height_px=args.height_px,
                 rgb_px=args.photo_px,
                 photo_square_px=window,
+                centre=args.centre,
             )
 
         (out / "plates").mkdir(parents=True, exist_ok=True)
         n = _save_plate(
-            out / "plates" / f"{stem}.npz", stem, cells, hm, photo, cross, window
+            out / "plates" / f"{stem}.npz", stem, cells, hm, photo, cross, window,
+            args.centre,
         )
         if n == 0:
             raise ValueError("no usable cells produced")
@@ -332,6 +343,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--photo-window-px", type=int, default=None,
                    help="square photo window in source pixels; "
                         "default is 95%% of the tighter fitted grid pitch")
+    p.add_argument("--centre", choices=("detected", "lattice"), default="detected",
+                   help="centre each crop on the pad the detector found in that "
+                        "slot (default), or on the fitted grid's prediction for "
+                        "every cell. 'detected' falls back to the prediction "
+                        "where no pad was assigned. Study 03 measured mean pad "
+                        "IoU 0.71 vs 0.63 in favour of 'detected'")
     p.add_argument("--timeout", type=int, default=180,
                    help="give up on a plate after this many seconds "
                         "(default 180; 0 disables). Guards against malformed "
@@ -435,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         "height_px": args.height_px,
         "photo_window_px": args.photo_window_px or "auto (95% of tighter pitch)",
         "photo_crop_geometry": "square in sensor pixels",
+        "centre": args.centre,
         "plates_ok": len(ok),
         "plates_failed": len(results) - len(ok),
         "cells": len(all_cells),

@@ -1,6 +1,6 @@
 # Studies
 
-Two investigations built on the `Auto_OPDx.alignment` package. Each is a
+Three investigations built on the `Auto_OPDx.alignment` package. Each is a
 self-contained folder with the same shape:
 
 ```
@@ -18,6 +18,7 @@ Read them in order — the second exists because of what the first found.
 |---|---|---|---|
 | 01 | [**Label alignment**](01-label-alignment/README.md) | Were the training labels for "height from a photo" built correctly? | No. 71% of the label was substrate tilt; a row/column lookup beat the published model. Rebuilt labels; absolute-height prediction does not survive. |
 | 02 | [**Thickness-signal audit**](02-thickness-signal-audit/README.md) | Is that negative result an artifact of how the features were built? | No. Diluted features, crop size and label noise all ruled out. ~Half of the model's remaining skill was reading plate position; ρ≈0.20 of genuine structural signal survives. |
+| 03 | [**Alignment IoU**](03-alignment-iou/README.md) | Is the new alignment measurably better than the previous crops, not just visibly? | Yes, once the crops centre on the detected pads: mean pad IoU 0.67 → 0.71, cells with no pad in the crop 59 → 0, on the same 2,855 cells. The first release scored 0.63 — below the previous crops — which this study caught and fixed. |
 
 ## How the pieces fit
 
@@ -49,6 +50,9 @@ uv run python studies/02-thickness-signal-audit/src/build_features.py
 uv run python studies/02-thickness-signal-audit/src/evaluate.py
 uv run python studies/02-thickness-signal-audit/src/position_control.py
 uv run python studies/02-thickness-signal-audit/src/make_figures.py
+
+uv run python studies/03-alignment-iou/src/compute_iou.py
+uv run python studies/03-alignment-iou/src/make_figures.py
 ```
 
 Set `MPLBACKEND=Agg` when running headless. Notebooks: regenerate with each

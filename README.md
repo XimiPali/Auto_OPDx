@@ -69,7 +69,26 @@ aligned/
 
 Useful flags: `--dry-run` (show the pairing, process nothing), `--skip-existing`
 (resume a partial run), `--pattern '{stem}_photo'` (when the two folders name
-files differently), `--limit N`, `--no-qc`. Full list with `align-plates --help`.
+files differently), `--limit N`, `--no-qc`, `--centre lattice` (centre every
+crop on the fitted grid instead of the detected pad — the first release's
+behaviour, kept for comparison). Full list with `align-plates --help`.
+
+**Is it measurably better than the previous crops?** Yes — study 03 scores both
+with the same metric, the overlap (IoU) of the pad as seen in the photo crop and
+in the height-map crop, over the 2,855 cells both pipelines produced:
+
+| | previous crops | `align-plates` |
+|---|---|---|
+| mean IoU | 0.67 | **0.71** |
+| median IoU | 0.72 | **0.75** |
+| cells where the crop missed the pad entirely | 59 | **0** |
+| median distance between the two pad centres | 4.4 µm | **2.5 µm** |
+
+The ceiling for any method on this data is ≈0.73 (the two instruments draw the
+pad with different shapes), so the new tool sits at 97% of it. Details,
+figures and the honest history — the first release scored *below* the previous
+crops until the crops were re-centred on the detected pads — in
+`studies/03-alignment-iou/`.
 
 Loading one plate:
 
@@ -80,6 +99,8 @@ d["photo_crops"]   # (64, 96, 96, 3) uint8
 d["height_crops"]  # (64, 32, 32)    float32, µm above the substrate
 d["height_um"]     # (64,)           the label
 d["row_col"]       # (64, 2)         grid position
+d["hm_centre_detected"], d["photo_centre_detected"]
+                   # (64,) 1 = crop centred on the detected pad, 0 = on the grid fit
 ```
 
 ## What we found — the short version
@@ -132,7 +153,7 @@ Auto_OPDx/
 │   ├── dataset.py                    register photo ↔ scan · cut per-cell crops · compute labels
 │   └── cli.py                        THE TOOL — `align-plates`, folder in → aligned arrays out
 │
-├── tests/                          39 tests
+├── tests/                          42 tests
 │   ├── test_lattice.py               the grid solver, against synthetic grids with known truth
 │   └── test_cli.py                   pairing, arguments, and every failure path of the tool
 │
@@ -143,9 +164,10 @@ Auto_OPDx/
 │   ├── 04_dinov2_features.py         DINOv2 embeddings of the crops
 │   └── 05_evaluate_labels.py         leave-one-plate-out, sweep over control-point count K
 │
-├── studies/                        THE FINDINGS — two write-ups, same shape   → studies/README.md
+├── studies/                        THE FINDINGS — three write-ups, same shape → studies/README.md
 │   ├── 01-label-alignment/           "Were the labels built right?"        → no; here's the fix
-│   └── 02-thickness-signal-audit/    "Is that negative result an artifact?" → no; here's why
+│   ├── 02-thickness-signal-audit/    "Is that negative result an artifact?" → no; here's why
+│   └── 03-alignment-iou/             "Is the new alignment measurably better?" → yes; IoU 0.67 → 0.71
 │         each has: README.md (every number) · a runnable notebook · src/ · results/ · figures/
 │
 ├── data/                           NOT IN GIT — 69 .OPDx scans, 69 photos, metadata, caches
@@ -223,6 +245,9 @@ matplotlib backend. Also, NumPy 2 on Apple Accelerate raises spurious
 - ✅ Labels rebuilt for all 69 plates; pipeline validated (reproduces the
   previous model's result on the *old* labels, so the comparison is sound)
 - ✅ Negative result stress-tested and confirmed (study 02)
+- ✅ Alignment quality measured against the previous crops with IoU (study 03):
+  0.67 → 0.71 mean, 59 → 0 cells with no pad in the crop; crops now centre on
+  the detected pad (`--centre`, default `detected`)
 - ⬜ Present findings; decide between depth-from-focus, oblique
   illumination, and reference patches
 - ⬜ Try a per-formulation target (between-chip variation is 2.3× the

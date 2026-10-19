@@ -231,6 +231,14 @@ def test_parser_defaults_match_the_documented_ones():
     assert a.photo_window_px is None      # auto
     assert a.pattern == "{stem}"
     assert a.timeout == 180
+    assert a.centre == "detected"
+
+
+def test_centre_flag_only_accepts_the_two_modes():
+    base = ["--images", "i", "--labels", "l", "--out", "o"]
+    assert build_parser().parse_args(base + ["--centre", "lattice"]).centre == "lattice"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(base + ["--centre", "centroid"])
 
 
 def test_parser_requires_all_three_folders():
