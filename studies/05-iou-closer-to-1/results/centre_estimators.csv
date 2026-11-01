@@ -1,0 +1,12 @@
+instrument,estimator,grid_residual_x_um,grid_residual_y_um,pads
+photo,plate detection (intensity-weighted centroid),2.1960913580539745,2.678937938172549,2742
+photo,outline centroid,2.397493314014058,2.973804552530245,2742
+photo,outline edge midpoint,2.1975078327938475,2.8120650625228354,2742
+scan,plate detection (intensity-weighted centroid),3.910901899879827,3.7400542410000748,2742
+scan,outline centroid,4.2629756309597635,3.7227331906357377,2742
+scan,outline edge midpoint,4.706836564127016,3.750491996405604,2742
+scan,fit across traces (x) / half-height midpoint (y),4.859880807635034,3.8440124269986957,2742
+photo,"height-weighted centroid, gray channel",2.2836155230285717,2.7355067002911944,2375
+photo,"height-weighted centroid, red channel",2.3151898998346696,2.6772040916021687,2375
+photo,"height-weighted centroid, green channel",2.439212372091936,2.8967376697852885,2375
+photo,"height-weighted centroid, blue channel",2.116754674448842,2.6683023226174143,2375

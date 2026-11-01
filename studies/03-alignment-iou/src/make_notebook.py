@@ -141,14 +141,21 @@ md(r"""
 ## 5. Why the ceiling is not 1
 
 Even a perfect alignment cannot reach IoU = 1 here, because the two instruments
-draw the pad differently. The stylus samples the scan every **30 µm along x**
-(and 2.9 µm along y), so a 61 µm-wide pad is two or three samples wide and its
-mask edge is smeared by interpolation; the photo resolves it at 1.25 µm. On top
-of that the two instruments disagree about the grid's aspect ratio by ~4:3 (the
-open calibration question from study 01), which stretches one mask relative to
-the other. Sliding the masks so their centroids coincide gives the ceiling
-reported in the table; the gap between a method's IoU and that ceiling is the
-part that alignment is responsible for.
+draw the pad differently. The largest single reason is the stylus's trace
+spacing, **30 µm across the pads** (2.9 µm along each trace), in a specific way
+worked out in study 05: a pad that sits *on* a trace has only that one trace
+across its flat top, so the height-map outline comes out about a third too
+narrow. Study 05 rebuilds each pad from its traces and, with smaller fixes,
+raises the mean IoU to 0.767 (previous crops 0.728, same measurement).
+
+(Earlier versions of this notebook overstated the trace effect as a hard cap of
+0.71, and also blamed the ≈ 4:3 aspect disagreement, which cannot move IoU: the
+photo is mapped into the scan's frame by a full affine, and IoU is unchanged
+when both outlines are stretched by the same affine.)
+
+Sliding the masks so their centroids coincide gives the ceiling reported in the
+table; the gap between a method's IoU and that ceiling is the part that
+alignment is responsible for.
 """)
 
 co(r"""

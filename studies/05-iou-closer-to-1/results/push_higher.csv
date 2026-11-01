@@ -1,0 +1,6 @@
+experiment,kind,new_mean_iou,previous_mean_iou,new_frac_at_least_0p8,new_frac_at_least_0p9
+final recipe,measured,0.7673497568618391,0.7278886220050921,0.4119089316987741,0.022066549912434327
+per-chip size calibration (leave-one-out),calibration,0.7933726184161703,0.7490714536840661,0.5590192644483363,0.04658493870402802
+if both instruments agreed on each pad's size,oracle,0.8163692439459095,,0.6612959719789843,0.12399299474605954
+if both instruments agreed on each pad's centre,oracle,0.8156968258923469,,0.6640980735551664,0.09281961471103327
+if they agreed on size and centre (only outline shape differs),oracle,0.8961172627492578,,0.9716287215411559,0.5225919439579685

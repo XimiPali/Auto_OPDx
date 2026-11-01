@@ -1,0 +1,7 @@
+quantity,rms_um,share_by_column
+"photo vs scan centre (x), all",6.937969277887694,
+"photo vs scan centre (x), per-column part removed",4.598777653264476,
+"photo vs scan centre (y), all",4.0521120422559305,
+"photo vs scan centre (y), per-row part removed",3.5288506222979827,
+scan rigid-grid residual (x),5.917705486109137,0.5480639685028258
+photo rigid-grid residual (x),2.1960913580539745,0.25689372814585965

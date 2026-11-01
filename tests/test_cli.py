@@ -232,6 +232,14 @@ def test_parser_defaults_match_the_documented_ones():
     assert a.pattern == "{stem}"
     assert a.timeout == 180
     assert a.centre == "detected"
+    assert a.photo_crop == "sensor"
+
+
+def test_photo_crop_flag_only_accepts_the_two_geometries():
+    base = ["--images", "i", "--labels", "l", "--out", "o"]
+    assert build_parser().parse_args(base + ["--photo-crop", "scan"]).photo_crop == "scan"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(base + ["--photo-crop", "pixels"])
 
 
 def test_centre_flag_only_accepts_the_two_modes():

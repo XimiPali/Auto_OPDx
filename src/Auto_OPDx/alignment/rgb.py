@@ -37,14 +37,43 @@ from Auto_OPDx.alignment.lattice import detect_features
 # Percentiles tried in order until at least rows*cols blobs survive.
 _THRESHOLD_LADDER = (93.0, 95.0, 90.0, 97.0, 87.0, 83.0)
 
+# Long side, in pixels, of the photos the defaults were tuned on (2048x1536 at
+# 4x). Larger images -- e.g. a 1-inch sensor imaging the same plate -- are
+# treated as the same field at higher resolution.
+_REFERENCE_PX = 2048
+
 
 def load_rgb(path: str | Path) -> np.ndarray:
-    """Load a plate photo as an RGB uint8 array. Handles .jpg and .bmp."""
+    """Load a plate photo as an RGB uint8 array.
+
+    Ordinary 8-bit files (.jpg, .bmp, 8-bit .png/.tif) take the same path as
+    always. 16-bit and floating-point images -- the usual output of focus-
+    stacking software for an all-in-focus composite -- are scaled to 8 bits by
+    their own 99.9th percentile rather than by the type's maximum, so a 12-bit
+    image stored in 16 bits keeps its contrast instead of collapsing into the
+    bottom 16 grey levels. Greyscale is replicated to three channels and alpha
+    is dropped.
+    """
     path = Path(path)
-    bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if bgr is None:
+    raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if raw is None:
         raise ValueError(f"could not read image: {path}")
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    if raw.dtype == np.uint8:
+        # unchanged legacy path (also applies any EXIF orientation)
+        bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+    img = raw.astype(np.float32)
+    if img.ndim == 3 and img.shape[2] == 4:
+        img = img[..., :3]
+    top = float(np.percentile(img, 99.9))
+    low = float(min(img.min(), 0.0))
+    if not np.isfinite(top) or top <= low:
+        raise ValueError(f"image has no usable dynamic range: {path}")
+    img8 = np.clip((img - low) / (top - low) * 255.0, 0, 255).astype(np.uint8)
+    if img8.ndim == 2:
+        return cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
+    return cv2.cvtColor(img8, cv2.COLOR_BGR2RGB)
 
 
 def dark_feature_response(
@@ -55,6 +84,15 @@ def dark_feature_response(
     ``sigma`` must comfortably exceed the feature size so the blur estimates
     illumination rather than the features themselves. At ~250 px cell pitch,
     120 px is a good default.
+
+    ``sigma`` is in units of a :data:`_REFERENCE_PX`-wide image. A larger image
+    of the same field gets a proportionally larger blur, so the background
+    estimate means the same thing at any resolution. The blur is then computed
+    on a copy shrunk back to the reference size and enlarged again: the
+    illumination is smooth, so nothing is lost, and a 22-megapixel photo costs
+    the same as a 3-megapixel one (13 s -> 0.1 s for the blur on a 5468x4101
+    image). Images no larger than the reference take the direct path exactly
+    as before.
 
     Returns
     -------
@@ -67,7 +105,15 @@ def dark_feature_response(
     gray = np.asarray(img_rgb, float)
     if gray.ndim == 3:
         gray = gray.mean(axis=2)
-    background = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    h, w = gray.shape
+    scale = max(h, w) / _REFERENCE_PX
+    if scale <= 1.0:
+        background = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    else:
+        small = cv2.resize(gray, (max(1, round(w / scale)), max(1, round(h / scale))),
+                           interpolation=cv2.INTER_AREA)
+        small = cv2.GaussianBlur(small, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        background = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
     flat = gray / np.maximum(background, 1e-6)
     return np.clip(1.0 - flat, 0.0, None), background
 

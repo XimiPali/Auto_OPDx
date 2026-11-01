@@ -36,73 +36,6 @@ fork does.
 3. deploy           photo replaces the needle                                 (the goal)
 ```
 
-## The tool
-
-One command. Point it at a folder of photos and a folder of scans; get aligned
-per-cell data out.
-
-```bash
-align-plates --images data/rgb/img --labels data/opdx --out aligned/
-```
-
-```
-found 69 photo/scan pairs
-aligned 69/69 plates · 4416 cells · 252s
-  registration error   median   8.15 µm (3.1% of a cell)
-  cells per plate      median     64 of 64
-  substrate tilt removed median  20.99 µm (71% of the raw height range)
-```
-
-It pairs files by name, finds all 64 pads in each image, fits the grid, registers
-the two, and writes:
-
-```
-aligned/
-  plates/<plate>.npz   photo crop + height crop + true height for every cell,
-                       plus that plate's registration error and scale
-  qc/<plate>.png       8×8 montage, each cell labelled with its height —
-                       open these to check a run without writing any code
-  summary.csv          one row per plate
-  cells.csv            one row per cell
-  manifest.json        the exact settings the run used
-```
-
-Useful flags: `--dry-run` (show the pairing, process nothing), `--skip-existing`
-(resume a partial run), `--pattern '{stem}_photo'` (when the two folders name
-files differently), `--limit N`, `--no-qc`, `--centre lattice` (centre every
-crop on the fitted grid instead of the detected pad — the first release's
-behaviour, kept for comparison). Full list with `align-plates --help`.
-
-**Is it measurably better than the previous crops?** Yes — study 03 scores both
-with the same metric, the overlap (IoU) of the pad as seen in the photo crop and
-in the height-map crop, over the 2,855 cells both pipelines produced:
-
-| | previous crops | `align-plates` |
-|---|---|---|
-| mean IoU | 0.67 | **0.71** |
-| median IoU | 0.72 | **0.75** |
-| cells where the crop missed the pad entirely | 59 | **0** |
-| median distance between the two pad centres | 4.4 µm | **2.5 µm** |
-
-The ceiling for any method on this data is ≈0.73 (the two instruments draw the
-pad with different shapes), so the new tool sits at 97% of it. Details,
-figures and the honest history — the first release scored *below* the previous
-crops until the crops were re-centred on the detected pads — in
-`studies/03-alignment-iou/`.
-
-Loading one plate:
-
-```python
-import numpy as np
-d = np.load("aligned/plates/10-01-2025_P1.npz")
-d["photo_crops"]   # (64, 96, 96, 3) uint8
-d["height_crops"]  # (64, 32, 32)    float32, µm above the substrate
-d["height_um"]     # (64,)           the label
-d["row_col"]       # (64, 2)         grid position
-d["hm_centre_detected"], d["photo_centre_detected"]
-                   # (64,) 1 = crop centred on the detected pad, 0 = on the grid fit
-```
-
 ## What we found — the short version
 
 **The previous labels were mostly measuring where a cell sat on the chip, not
@@ -150,12 +83,9 @@ Auto_OPDx/
 │   ├── plate.py                      load .OPDx → µm · fit substrate plane · detrend · resample
 │   ├── lattice.py                    detect the 64 features · fit ONE 8×8 grid model to all of them
 │   ├── rgb.py                        find the same 64 features in the photo
-│   ├── dataset.py                    register photo ↔ scan · cut per-cell crops · compute labels
-│   └── cli.py                        THE TOOL — `align-plates`, folder in → aligned arrays out
+│   └── dataset.py                    register photo ↔ scan · cut per-cell crops · compute labels
 │
-├── tests/                          42 tests
-│   ├── test_lattice.py               the grid solver, against synthetic grids with known truth
-│   └── test_cli.py                   pairing, arguments, and every failure path of the tool
+├── tests/test_lattice.py           19 tests of the grid solver against synthetic grids with known truth
 │
 ├── scripts/                        THE PIPELINE — numbered, run in order   → scripts/README.md
 │   ├── 01_diagnose_plate.py          one plate: geometry, tilt, feature count, figure
@@ -164,10 +94,9 @@ Auto_OPDx/
 │   ├── 04_dinov2_features.py         DINOv2 embeddings of the crops
 │   └── 05_evaluate_labels.py         leave-one-plate-out, sweep over control-point count K
 │
-├── studies/                        THE FINDINGS — three write-ups, same shape → studies/README.md
+├── studies/                        THE FINDINGS — two write-ups, same shape   → studies/README.md
 │   ├── 01-label-alignment/           "Were the labels built right?"        → no; here's the fix
-│   ├── 02-thickness-signal-audit/    "Is that negative result an artifact?" → no; here's why
-│   └── 03-alignment-iou/             "Is the new alignment measurably better?" → yes; IoU 0.67 → 0.71
+│   └── 02-thickness-signal-audit/    "Is that negative result an artifact?" → no; here's why
 │         each has: README.md (every number) · a runnable notebook · src/ · results/ · figures/
 │
 ├── data/                           NOT IN GIT — 69 .OPDx scans, 69 photos, metadata, caches
@@ -181,6 +110,25 @@ look at `studies/01-label-alignment/figures/summary.png`.
 **If you want the figures interactively:** open either study's `.ipynb` in
 VS Code or Jupyter and pick the `.venv` kernel (Python 3.12). Outputs are
 already embedded, so they read without running.
+
+┌─────────────────┬─────────────────────────────────────────┬──────────────────────────────────────────────────────┐
+│                 │                 Before                  │                         Mine                         │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Finding each    │ one centroid per pad, independently     │ one 8×8 grid fitted to all 64 pads at once           │
+│ pad             │                                         │                                                      │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Rotating to     │ rotated the height-map array as pixels  │ converted both images to micrometres first, then     │
+│ match           │                                         │ matched them                                         │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Crop shape      │ square in pixels                        │ square in micrometres                                │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Height-map      │ stretched to look square, 534 different │ one fixed size, nothing invented                     │
+│ crops           │  sizes                                  │                                                      │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Plates covered  │ 53 scans / 60 photos                    │ 69 / 69                                              │
+├─────────────────┼─────────────────────────────────────────┼──────────────────────────────────────────────────────┤
+│ Alignment error │ never measured                          │ 8 µm, about 3% of a cell                             │
+└─────────────────┴─────────────────────────────────────────┴──────────────────────────────────────────────────────┘
 
 ## What we built, in more detail
 
@@ -240,14 +188,9 @@ matplotlib backend. Also, NumPy 2 on Apple Accelerate raises spurious
 
 ## Status
 
-- ✅ **`align-plates` tool shipped** — one command, 69/69 plates, 4,416 cells,
-  no manual steps, QC image per plate
 - ✅ Labels rebuilt for all 69 plates; pipeline validated (reproduces the
   previous model's result on the *old* labels, so the comparison is sound)
 - ✅ Negative result stress-tested and confirmed (study 02)
-- ✅ Alignment quality measured against the previous crops with IoU (study 03):
-  0.67 → 0.71 mean, 59 → 0 cells with no pad in the crop; crops now centre on
-  the detected pad (`--centre`, default `detected`)
 - ⬜ Present findings; decide between depth-from-focus, oblique
   illumination, and reference patches
 - ⬜ Try a per-formulation target (between-chip variation is 2.3× the
@@ -256,6 +199,16 @@ matplotlib backend. Also, NumPy 2 on Apple Accelerate raises spurious
 Any future evaluation on this data **must include the position control** from
 study 02 — otherwise a model that has only learned the illumination gradient
 looks identical to one that has learned thickness.
+
+┌──────────────────────────────────────────┬────────────┬────────────────┐
+│                                          │ old labels │ rebuilt labels │
+├──────────────────────────────────────────┼────────────┼────────────────┤
+│ Model accuracy, R², with 8 control cells │ 0.68       │ −0.05          │
+├──────────────────────────────────────────┼────────────┼────────────────┤
+│ Ranking cells by height, Spearman ρ      │ 0.93       │ 0.42           │
+├──────────────────────────────────────────┼────────────┼────────────────┤
+│ Row/column position alone, no photo      │ 0.95       │ 0.41           │
+└──────────────────────────────────────────┴────────────┴────────────────┘
 
 ---
 
@@ -330,3 +283,42 @@ An interactive Jupyter Notebook is also provided for better visualization. You c
 jupyter lab
 ```
 This will open a web browser where you can open `profilometryheights_notebook.ipynb`. Ensure all OPDx files are in the same directory and complete the initial prompt asking for the file name and grid rows/cols.
+
+
+
+
+
+
+
+
+
+What could work instead
+
+The problem is the photo, not the model. A straight-down, evenly lit picture of a semi-transparent 5–20 micron film has almost nothing in it that changes with height. Three ways to put height into the image research using AI and diagnosing myself:
+
+1. Side lighting. One LED at a low angle. Taller pads throw longer shadows. A 10-micron pad at 20° gives a 25-pixel shadow. No learning needed. 
+2. Focus stack. Move the chip up in small steps, photograph at each. Each pad snaps into focus at its own height. Jason's motorised stage does exactly this — no new hardware.
+3. Reference patches — your idea. Known-height pads in the corners let the scale be read off the photo, no needle. Now the main path — but pair it with 1 or 2, because 0.20 on its own is R² of about 0.04.
+
+And one cheap reframing: predict per formulation across plates, not per cell within one. That signal is twice as large, and "did formulation X hit spec" is closer to what the lab actually asks.
+
+What I need from you
+
+- Is any of the removed tilt real deposition variation along the chamber? 
+- Which of the three to try first, and is Jason's stage usable this semester?
+- How you'd want the "position beats the model" result phrased before it reaches John 
+
+
+┌───────────────────────────────┬────────────────────┬───────────────────┐
+│            Metric             │        His         │       Mine        │
+├───────────────────────────────┼────────────────────┼───────────────────┤
+│ Grid-fit residual, height map │ 3.11% of a cell    │ 2.75%             │
+├───────────────────────────────┼────────────────────┼───────────────────┤
+│ Grid-fit residual, photo      │ 1.57%              │ 1.12%             │
+├───────────────────────────────┼────────────────────┼───────────────────┤
+│ Plates covered                │ 53 scan / 60 photo │ 69 / 69           │
+├───────────────────────────────┼────────────────────┼───────────────────┤
+│ Cells found                   │ whole rows empty   │ 64/64 every plate │
+├───────────────────────────────┼────────────────────┼───────────────────┤
+│ Photo↔scan registration       │ never measured     │ 8.15 µm           │
+└───────────────────────────────┴────────────────────┴───────────────────┘

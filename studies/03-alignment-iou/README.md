@@ -29,6 +29,14 @@ crop is in the wrong place, they do not (IoU → 0).
 2,855 cells scored; 25 excluded because no pad exists there in the scan or the
 photo (chipped off or never printed — not alignable by anyone).
 
+> **Later work (study 05).** With a more faithful outline recipe — chiefly
+> rebuilding each height-map pad from its traces — the same comparison reads
+> **0.728 (previous) vs 0.767 (new)**, ceiling 0.82, the gap unchanged. The
+> "median distance between the two pad centres" above is measured *within* the
+> crops and understates the real pairing error, because each crop is centred
+> on its own instrument's estimate; an independent check that does not use the
+> outlines gives a median of **8.3 µm (previous) vs 5.7 µm (new)**.
+
 **Two things happened here, and both matter for the story.**
 
 1. **The first release of `align-plates` was *not* better than the previous
@@ -128,25 +136,36 @@ summary figure gives the curve). That is the whole gap between 0.634 and 0.709.
 ## 4. Why the ceiling is ≈ 0.73, not 1
 
 Even perfectly centred, the two masks do not coincide, because the two
-instruments draw the pad differently:
+instruments draw the pad differently. The largest single reason is the stylus's
+trace spacing — **30 µm across the pads** (2.9 µm along each trace) — but in a
+specific way, worked out in study 05: a ~53 µm pad that sits *on* a trace has only
+that one trace across its flat top, so linear interpolation turns it into a
+triangle and the height-map outline comes out about a third too narrow (mean
+IoU 0.58 for those cells against 0.75 for pads halfway between traces). The rest
+is ragged photo outlines (broken dark rims, debris) and per-pad size noise.
 
-- the stylus samples the scan every **30 µm along x** (2.9 µm along y), so a
-  61 µm-wide pad is two or three samples wide and its mask edge is smeared by
-  interpolation; the photo resolves the same edge at 1.25 µm;
-- the two instruments disagree about the grid's aspect ratio by ≈ 4:3 (the
-  open calibration question from study 01), which stretches one mask relative
-  to the other.
+*Corrections (2026-10-31).* Two earlier versions of this paragraph were wrong.
+The first said study 04's simulation showed "trace spacing alone" gives a
+ceiling of 0.71 and that 10 µm traces would allow ≈ 0.90; that simulation drew
+the outline by interpolation, which study 05 replaces in software. A follow-up
+then said the traces were *not* the main cause, from per-edge averages that hid
+the problem (most pads sit halfway between traces, where nothing goes wrong).
+
+*Correction (2026-10-30).* An earlier version of this section also blamed the
+≈ 4:3 photo-vs-scan aspect disagreement. That was wrong. The registration maps
+the photo into the scan's frame with a full affine, and IoU does not change when
+both outlines are stretched by the same affine, so the disagreement cannot move
+this metric. It affects only absolute µm sizes; see study 04.
 
 Sliding the masks so their centroids coincide gives the *ceiling* column in the
-table — the best any alignment could do on this data. The current tool sits at
+table — the best any alignment could do *with this outline recipe* (study 05
+raises it to 0.82 with better outlines). The current tool sits at
 **97 %** of it (mean IoU / ceiling); the previous crops at 92 % counting their
 59 failures as zero (94 % on the cells they did find); the lattice release at
-87 %. The remaining 3 % is detection noise on the scan's coarse axis and is not
-recoverable from these instruments.
+87 %.
 
-So "IoU 0.71" should be read as "essentially at the ceiling", not as "71 %
-aligned". When the lab moves to the 10× all-in-focus images and a finer scan,
-the ceiling rises and this metric will show it.
+So "IoU 0.71" should be read as "close to what this recipe can measure", not as
+"71 % aligned". Study 05 takes the recipe further.
 
 ## 5. What this does and does not claim
 

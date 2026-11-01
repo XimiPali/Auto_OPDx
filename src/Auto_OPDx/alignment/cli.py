@@ -244,13 +244,16 @@ def process_plate(
             hm = solve_plate(scan_path, args.rows, args.cols)
             photo = solve_photo(photo_path, args.rows, args.cols)
             cross = fit_cross_modal(hm, photo, args.cols)
-            window = _photo_window(photo.fit, args.photo_window_px)
+            # sensor: square in camera pixels; scan: square in the scan's um
+            # (0 marks "no pixel window" in the outputs). See --photo-crop.
+            window = (_photo_window(photo.fit, args.photo_window_px)
+                      if args.photo_crop == "sensor" else 0)
             cells = build_cells(
                 hm, photo, cross, args.rows, args.cols,
                 label_um=args.label_um,
                 height_px=args.height_px,
                 rgb_px=args.photo_px,
-                photo_square_px=window,
+                photo_square_px=window or None,
                 centre=args.centre,
             )
 
@@ -343,6 +346,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--photo-window-px", type=int, default=None,
                    help="square photo window in source pixels; "
                         "default is 95%% of the tighter fitted grid pitch")
+    p.add_argument("--photo-crop", choices=("sensor", "scan"), default="sensor",
+                   help="shape of the photo crop. 'sensor' (default): square in camera "
+                        "pixels, right if the camera's pixels are square (the optics say "
+                        "1.25 µm). 'scan': square in the scan's micrometres, right if the "
+                        "photo was resampled on export. The two instruments disagree by "
+                        "~4:3 and only an outside reference can say which is right -- "
+                        "see studies/04-instrument-checks")
     p.add_argument("--centre", choices=("detected", "lattice"), default="detected",
                    help="centre each crop on the pad the detector found in that "
                         "slot (default), or on the fitted grid's prediction for "
@@ -451,7 +461,8 @@ def main(argv: list[str] | None = None) -> int:
         "photo_px": args.photo_px,
         "height_px": args.height_px,
         "photo_window_px": args.photo_window_px or "auto (95% of tighter pitch)",
-        "photo_crop_geometry": "square in sensor pixels",
+        "photo_crop_geometry": ("square in sensor pixels" if args.photo_crop == "sensor"
+                                else "square in micrometres (scan frame)"),
         "centre": args.centre,
         "plates_ok": len(ok),
         "plates_failed": len(results) - len(ok),
@@ -476,8 +487,11 @@ def main(argv: list[str] | None = None) -> int:
               f"of {args.rows * args.cols}")
         print(f"  substrate tilt removed median {med('tilt_pp_um'):6.2f} µm "
               f"({med('tilt_fraction') * 100:.0f}% of the raw height range)")
-        print(f"  photo window         {ok[0].photo_window_px} px square "
-              f"(pads undistorted)")
+        if args.photo_crop == "sensor":
+            print(f"  photo window         {ok[0].photo_window_px} px square "
+                  f"(pads undistorted)")
+        else:
+            print(f"  photo window         square in the scan's µm (--photo-crop scan)")
     for r in results:
         if not r.ok:
             print(f"  FAILED {r.stem}: {r.error}")
